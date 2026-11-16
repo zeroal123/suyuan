@@ -58,7 +58,7 @@
 
 <footer class="foot">
   <p>纯前端页面，没有服务器。key 和历史只存在这台设备的浏览器里。</p>
-  <p>版本 2026-11-16</p>
+  <p>版本 v1.1（2026-11-16）</p>
 </footer>
 
 <dialog id="dlg">
@@ -71,10 +71,12 @@
     <input id="sBase" type="url" autocomplete="off" spellcheck="false">
     <p class="hint">默认直连 DeepSeek。如果自检显示被跨域策略拦截，可以换成你自己的转发地址。</p>
     <label class="lab" for="sModel">模型</label>
-    <select id="sModel">
-      <option value="deepseek-flash">deepseek-flash（快，便宜）</option>
-      <option value="deepseek-v4-pro">deepseek-v4-pro（更强，更贵）</option>
-    </select>
+    <div class="row tight">
+      <select id="sModel"></select>
+      <button id="sModels" class="ghost" type="button">刷新列表</button>
+    </div>
+    <input id="sModelCustom" type="text" autocomplete="off" spellcheck="false" placeholder="填模型名，如 deepseek-flash" hidden>
+    <p class="hint" id="sModelHint"></p>
     <label class="check"><input id="sThink" type="checkbox"> 归纳时开启深度思考（更慢）</label>
     <div class="row">
       <button id="sTest" class="ghost" type="button">连接自检</button>

@@ -64,7 +64,7 @@ function analysisFor(userContent) {
 async function setup(browser, opts = {}) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: opts.dark ? 'dark' : 'light' });
   const page = await ctx.newPage();
-  const log = { errors: [], calls: [], unexpected: [] };
+  const log = { errors: [], calls: [], unexpected: [], models: [] };
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|net::ERR_FAILED/.test(m.text())) log.errors.push(m.text()); });
   page.on('pageerror', (e) => log.errors.push(String(e)));
   page.on('dialog', (d) => { log.errors.push('dialog: ' + d.message()); d.dismiss(); });
@@ -74,9 +74,16 @@ async function setup(browser, opts = {}) {
     log.calls.push(url);
     const json = (o, status = 200) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(o) });
     if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' } });
+    if (url.endsWith('/models')) {
+      if (opts.modelsFail) return route.abort('failed');
+      assert.equal(req.headers().authorization, 'Bearer sk-test');
+      return json({ object: 'list', data: [{ id: 'deepseek-flash', object: 'model' }, { id: 'deepseek-v4-pro', object: 'model' }, { id: 'deepseek-v5-next', object: 'model' }] });
+    }
     if (url.endsWith('/chat/completions')) {
       if (opts.chatFails) return json({ error: { message: 'Authentication Fails' } }, 401);
       const body = JSON.parse(req.postData());
+      log.models.push(body.model);
+      if (opts.modelGone && body.model === 'old-model') return json({ error: { message: 'Model Not Exist' } }, 400);
       if (body.max_tokens === 1) return json({ choices: [{ message: { content: 'p' } }], usage: { total_tokens: 2 } }); // 自检的 ping
       assert.equal(body.response_format.type, 'json_object');
       assert.ok(['enabled', 'disabled'].includes(body.thinking.type));
@@ -244,6 +251,48 @@ await scenario('设置：连接自检逐项给结果；深色模式可渲染', a
   await page.click('#sSave');
   await runQuery(page, 'Claude 今天下午突然一直报错 overloaded_error');
   await page.screenshot({ path: path.join(shots, 'top-dark.png') });
+  assert.deepEqual(log.errors, []);
+  await ctx.close();
+});
+
+await scenario('模型：列表从账号读取，新模型刷新即有，也能手填；模型下线时给出提示', async () => {
+  const { page, log, ctx } = await setup(browser, { key: true, modelGone: true });
+  await page.click('#btnSet');
+  await page.click('#sModels');
+  await page.waitForFunction(() => /已读取 3 个模型/.test(document.getElementById('sModelHint').textContent));
+  const opts = await page.locator('#sModel option').allInnerTexts();
+  assert.ok(opts.includes('deepseek-v5-next'), opts.join(' | '));
+  assert.equal(opts[opts.length - 1], '手动填写…');
+  await page.selectOption('#sModel', 'deepseek-v5-next');
+  await page.click('#sSave');
+  await runQuery(page, 'Claude 一直报错 overloaded_error');
+  assert.ok(log.models.length >= 2 && log.models.every((m) => m === 'deepseek-v5-next'), log.models.join(','));
+  // 手填一个已经下线的模型名
+  await page.click('#btnSet');
+  await page.selectOption('#sModel', '__custom__');
+  assert.equal(await page.locator('#sModelCustom').isVisible(), true);
+  await page.fill('#sModelCustom', 'old-model');
+  await page.click('#sSave');
+  await page.waitForFunction(() => (JSON.parse(localStorage.getItem('suyuan.cfg') || '{}')).model === 'old-model');
+  await page.click('#btnSet');
+  assert.equal(await page.locator('#sModel').inputValue(), 'old-model');
+  assert.match((await page.locator('#sModel option').allInnerTexts()).join('|'), /old-model（不在当前列表里）/);
+  await page.click('#sCancel');
+  await runQuery(page, 'Claude 一直报错');
+  assert.match(await page.locator('#progress').innerText(), /模型「old-model」可能已下线/);
+  assert.ok((await page.locator('.ev').count()) >= 1, '模型不可用时仍给出条目');
+  assert.deepEqual(log.errors, []);
+  assert.deepEqual(log.unexpected, []);
+  await ctx.close();
+});
+
+await scenario('模型列表读取失败：提示手填，不影响保存', async () => {
+  const { page, log, ctx } = await setup(browser, { key: true, modelsFail: true });
+  await page.click('#btnSet');
+  await page.click('#sModels');
+  await page.waitForFunction(() => /读取失败/.test(document.getElementById('sModelHint').textContent));
+  assert.deepEqual(await page.locator('#sModel option').allInnerTexts(), ['deepseek-flash（快，便宜）', 'deepseek-v4-pro（更强，更贵）', '手动填写…']);
+  await page.click('#sSave');
   assert.deepEqual(log.errors, []);
   await ctx.close();
 });

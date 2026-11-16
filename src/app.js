@@ -79,7 +79,13 @@
   async function chatOnce(messages, maxTokens, think) {
     const body = { model: cfg.model, messages, response_format: { type: 'json_object' }, max_tokens: maxTokens, thinking: { type: think ? 'enabled' : 'disabled' } };
     if (think) body.reasoning_effort = 'high';
-    const data = await req(baseUrl(cfg.base) + '/chat/completions', { method: 'POST', headers: auth(cfg.key), body: JSON.stringify(body) }, think ? 240000 : 120000);
+    let data;
+    try {
+      data = await req(baseUrl(cfg.base) + '/chat/completions', { method: 'POST', headers: auth(cfg.key), body: JSON.stringify(body) }, think ? 240000 : 120000);
+    } catch (e) {
+      if (/model/i.test(e.message) && (e.status === 400 || e.status === 404)) e.message += '。模型「' + cfg.model + '」可能已下线，到「设置」里点「刷新列表」换一个';
+      throw e;
+    }
     usage.tokens += (data.usage && data.usage.total_tokens) || 0;
     const msg = data.choices && data.choices[0] && data.choices[0].message;
     return C.extractJson(msg && msg.content);
@@ -486,8 +492,45 @@
   function updateHint() {
     $('modeHint').textContent = cfg.key ? '' : '还没填 DeepSeek key：现在只能抓取和过滤，没有结论。点右上角「设置」填写。';
   }
+  /* 模型：列表从账号读取并缓存，出了新模型刷新即可；也可以手填任意模型名 */
+  const KNOWN = { 'deepseek-flash': '快，便宜', 'deepseek-v4-pro': '更强，更贵' };
+  const CUSTOM = '__custom__';
+  const MODEL_HINT = '列表从你的账号读取，出了新模型点「刷新列表」就有。也可以选「手动填写」。';
+  function fillModels(selected) {
+    const listed = cfg.models && cfg.models.length ? cfg.models : Object.keys(KNOWN);
+    const ids = C.uniq(listed.concat(selected && selected !== CUSTOM ? [selected] : []));
+    const sel = $('sModel');
+    sel.replaceChildren();
+    ids.forEach((id) => sel.append(h('option', { value: id }, id + (KNOWN[id] ? '（' + KNOWN[id] + '）' : listed.indexOf(id) < 0 ? '（不在当前列表里）' : ''))));
+    sel.append(h('option', { value: CUSTOM }, '手动填写…'));
+    sel.value = ids.indexOf(selected) >= 0 ? selected : ids[0];
+    $('sModelCustom').hidden = true;
+  }
+  function pickedModel() {
+    const v = $('sModel').value;
+    return (v === CUSTOM ? $('sModelCustom').value.trim() : v) || DEFAULTS.model;
+  }
+  async function refreshModels(silent) {
+    const key = $('sKey').value.trim(), hint = $('sModelHint');
+    if (!key) { if (!silent) hint.textContent = '先填 key 才能读取模型列表。'; return; }
+    $('sModels').disabled = true;
+    try {
+      const d = await req(baseUrl($('sBase').value) + '/models', { headers: { Authorization: 'Bearer ' + key } }, 15000);
+      const ids = (Array.isArray(d.data) ? d.data : []).map((m) => m && m.id).filter((x) => typeof x === 'string' && x);
+      if (!ids.length) throw new Error('列表是空的');
+      cfg.models = C.uniq(ids).slice(0, 60); cfg.modelsAt = Date.now();
+      store.set(LS.cfg, cfg);
+      fillModels(pickedModel());
+      if (!silent) hint.textContent = '已读取 ' + cfg.models.length + ' 个模型。';
+    } catch (e) {
+      if (!silent) hint.textContent = '读取失败：' + e.message + '。可以选「手动填写」直接填模型名。';
+    } finally { $('sModels').disabled = false; }
+  }
   function openSettings() {
-    $('sKey').value = cfg.key; $('sBase').value = cfg.base; $('sModel').value = cfg.model; $('sThink').checked = !!cfg.think;
+    $('sKey').value = cfg.key; $('sBase').value = cfg.base; $('sThink').checked = !!cfg.think;
+    $('sModelCustom').value = ''; $('sModelHint').textContent = MODEL_HINT;
+    fillModels(cfg.model);
+    if (cfg.key && (!cfg.modelsAt || Date.now() - cfg.modelsAt > C.DAY)) refreshModels(true);
     $('sTestOut').replaceChildren();
     const d = $('dlg');
     if (d.showModal) d.showModal(); else d.setAttribute('open', '');
@@ -495,7 +538,7 @@
   function saveSettings() {
     cfg.key = $('sKey').value.trim();
     cfg.base = baseUrl($('sBase').value) || DEFAULTS.base;
-    cfg.model = $('sModel').value || DEFAULTS.model;
+    cfg.model = pickedModel();
     cfg.think = $('sThink').checked;
     if (!store.set(LS.cfg, cfg)) alertText('浏览器不允许保存设置（可能是无痕模式），这次打开期间仍然有效。');
     updateHint();
@@ -505,7 +548,7 @@
   async function selfTest() {
     const out = $('sTestOut');
     out.replaceChildren();
-    const key = $('sKey').value.trim(), b = baseUrl($('sBase').value), model = $('sModel').value;
+    const key = $('sKey').value.trim(), b = baseUrl($('sBase').value), model = pickedModel();
     const row = (label) => {
       const ic = h('span', { class: 'ic' }, ICON.run), note = h('span', { class: 'note' });
       const li = h('li', { class: 'st-run' }, ic, h('div', null, label, ' ', note));
@@ -538,6 +581,8 @@
     $('btnSet').addEventListener('click', openSettings);
     $('sTest').addEventListener('click', selfTest);
     $('sCancel').addEventListener('click', () => $('dlg').close('cancel'));
+    $('sModels').addEventListener('click', () => refreshModels(false));
+    $('sModel').addEventListener('change', () => { const on = $('sModel').value === CUSTOM; $('sModelCustom').hidden = !on; if (on) $('sModelCustom').focus(); });
     $('sClear').addEventListener('click', () => { store.set(LS.hist, []); renderHistory(); $('sTestOut').replaceChildren(h('li', { class: 'st-ok' }, h('span', { class: 'ic' }, ICON.ok), h('div', null, '历史已清空'))); });
     $('dlg').addEventListener('close', () => { if ($('dlg').returnValue === 'save') saveSettings(); });
   }
