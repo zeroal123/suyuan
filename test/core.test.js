@@ -216,6 +216,41 @@ test('applyFilters 说明文档不算事故证据；对上报错原文的留下�
   assert.equal(out.report.verdict, 'insufficient');
 });
 
+test('粘贴的帖子：不要求提到产品，过期的照样排除，同一内容粘两次只算一条，能算作独立来源', () => {
+  const link = 'https://www.reddit.com/search/?q=Claude&sort=new';
+  const mk = (title, mins, src) => C.fromPaste({ title, text: title + ' — body', time: '3h', minutes_ago: mins, replies: 5, author: 'u1' }, src || 'reddit', NOW, link);
+  const a = mk('anyone else getting errors on sonnet since noon', 120);
+  const b = mk('same here, EU, web and code', 100);
+  const old = mk('it was also down last week', 60 * 24 * 6);
+  const again = mk('anyone else getting errors on sonnet since noon', 120);
+  const chat = C.fromPaste({ title: '', text: '群里都说下午用不了，四点多才好', minutes_ago: null }, 'group', NOW, '');
+  assert.equal(C.fromPaste({}, 'x', NOW, ''), null);
+  assert.deepEqual([a.src, a.type, a.pasted, a.hostLabel, a.url], ['paste', 'community', true, 'reddit.com', link]);
+  assert.equal(a.canonKey, again.canonKey);
+  assert.notEqual(a.canonKey, b.canonKey);
+  assert.equal(chat.url, ''); assert.equal(chat.date, null); assert.equal(chat.title, '群里都说下午用不了，四点多才好');
+  const r = C.applyFilters([a, b, old, again, chat], ctx());
+  assert.deepEqual(r.excluded.map((e) => e.reason).sort(), ['dup', 'old']);
+  assert.equal(r.kept.length, 3);
+  assert.deepEqual(r.kept.map((k) => k.host).sort(), ['reddit.com', 'reddit.com', '群聊']);
+  assert.ok(r.kept.find((k) => k.host === '群聊').undated);
+  const ids = r.kept.filter((k) => k.host === 'reddit.com').map((k) => k.id);
+  const out = C.postProcess({ verdict: 'widespread', headline: 'h', confidence: 'high', causes: [{ title: 'x', confidence: 'high', evidence: ids }], labels: [] }, r.kept);
+  assert.equal(out.report.causes[0].confidence, 'medium', '两条独立的社区帖子，没有官方依据，最多到中');
+  assert.equal(out.report.causes[0].sources, 2);
+  const msgs = C.pasteMessages('x'.repeat(30000), 'Reddit', 'Claude', NOW, 480);
+  assert.match(msgs[0].content, /json/); assert.ok(!msgs[0].content.includes('拆解'));
+  assert.ok(msgs[1].content.length < 20200, '过长的粘贴内容要截断');
+});
+
+test('粘贴的帖子不受同一网站 12 条上限限制，并排在搜到的条目前面', () => {
+  const found = Array.from({ length: 14 }, (_, i) => item({ title: 'Claude error thread ' + i + ' q' + i * 7919, url: 'https://reddit.com/r/ClaudeAI/comments/s' + i + '/x', text: 'body ' + i + ' w' + i * 31 }));
+  const pasted = C.fromPaste({ title: 'my paste z9', text: 'unique pasted body k7', minutes_ago: 60 }, 'reddit', NOW, 'https://www.reddit.com/search/?q=x');
+  const r = C.applyFilters([...found, pasted], ctx());
+  assert.ok(r.kept.some((k) => k.pasted));
+  assert.equal(r.kept.filter((k) => k.host === 'reddit.com' && !k.pasted).length, 12);
+});
+
 test('applyFilters 上游故障条目不要求提到产品，但限量', () => {
   const up = Array.from({ length: 6 }, (_, i) => item({ upstream: true, title: 'Azure outage hits services ' + i + ' z' + i * 13, url: 'https://news' + i + '.example.com/a', text: 'Major outage at Azure number ' + i }));
   const r = C.applyFilters(up, ctx());

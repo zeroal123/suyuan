@@ -8,7 +8,7 @@
     get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
   };
-  const DEFAULTS = { provider: 'deepseek', key: '', base: 'https://api.deepseek.com', model: 'deepseek-flash', gKey: '', gModel: 'gemini-3.8-flash', think: false, win: 48 };
+  const DEFAULTS = { provider: 'deepseek', key: '', base: 'https://api.deepseek.com', model: 'deepseek-flash', gKey: '', gModel: 'gemini-3.8-flash', think: false, win: 48, paste: true };
   const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
   const PROVIDERS = {
     deepseek: { name: 'DeepSeek', known: { 'deepseek-flash': '快，便宜', 'deepseek-v4-pro': '更强，更贵' } },
@@ -18,6 +18,7 @@
   let cfg = Object.assign({}, DEFAULTS, store.get(LS.cfg, {}));
   let usage = newUsage();
   let running = false;
+  let lastRun = null; // 最近一次查询的原始材料，供「补充材料」并入后重新归纳
 
   /* ---------- DOM 小工具（外部文本一律走 textContent，不拼 HTML） ---------- */
   function safeUrl(u) {
@@ -338,32 +339,13 @@
       sFilter('ok', '共 ' + f.stats.total + ' 条 → 留下 ' + f.kept.length + ' 条，相似归组 ' + f.stats.similar + ' 条，排除 ' + f.excluded.length + ' 条');
 
       // 4 语义筛选与归纳
-      const sLlm = add('语义筛选与归纳');
-      let report = null, kept = f.kept, excluded = f.excluded;
-      if (!f.kept.length) {
-        report = emptyReport(statusInfo.fetched, statusInfo.active);
-        sLlm('skip', '没有可用条目，不调用模型');
-      } else if (llmOk) {
-        sLlm('run', cfg.think ? '深度思考中，可能要一两分钟' : '');
-        try {
-          const msgs = C.analysisMessages(desc, parsed, f.kept, statusInfo.summary, now, tzMin(), hours);
-          const pp = C.postProcess(await chatJson(msgs, cfg.think ? 20000 : 6000, cfg.think), f.kept);
-          report = pp.report; kept = pp.kept; excluded = excluded.concat(pp.moved);
-          sLlm('ok', pp.moved.length ? '又筛掉 ' + pp.moved.length + ' 条' : '');
-        } catch (e) {
-          sLlm('fail', e.message);
-          notices.push('归纳这一步失败：' + e.message + '。下面是过滤后的原始条目。');
-        }
-      } else sLlm('skip', hasLLM ? '模型不可用' : '没填 key，跳过');
       if (!hasLLM) notices.push('没填 key：只做了抓取和机械过滤，没有结论。到「设置」里填 DeepSeek 或 Gemini 的 key 可以得到归纳结果。');
       else if (!hasSearch) notices.push('没填 DeepSeek key，所以没有联网搜索：证据只来自 GitHub、Hacker News 和官方状态页，Reddit、X 和新闻都没查。');
+      const c = { desc, hours, now, parsed, raw, statusInfo, pasted: [], baseNotices: notices.slice() };
+      const res = await analyze(c, f, add('语义筛选与归纳'), llmOk, notices);
       if (usage.fallback) notices.push(usage.fallback);
-
-      const state = {
-        t: now, desc, hours, product: parsed.product, report, kept, excluded,
-        stats: Object.assign({}, f.stats, { kept: kept.length, excluded: excluded.length }),
-        links: C.buildDeepLinks(parsed), usage: Object.assign({}, usage), notices,
-      };
+      lastRun = c;
+      const state = makeState(c, f, res, notices);
       render(state);
       saveHistory(state);
     } catch (e) {
@@ -372,6 +354,93 @@
       box.hidden = false;
     } finally {
       running = false; $('go').disabled = false; $('go').textContent = '开始查';
+    }
+  }
+
+  async function analyze(c, f, sLlm, llmOk, notices) {
+    let report = null, kept = f.kept, excluded = f.excluded;
+    if (!f.kept.length) {
+      report = emptyReport(c.statusInfo.fetched, c.statusInfo.active);
+      sLlm('skip', '没有可用条目，不调用模型');
+    } else if (llmOk) {
+      sLlm('run', cfg.think ? '深度思考中，可能要一两分钟' : '');
+      try {
+        const msgs = C.analysisMessages(c.desc, c.parsed, f.kept, c.statusInfo.summary, c.now, tzMin(), c.hours);
+        const pp = C.postProcess(await chatJson(msgs, cfg.think ? 20000 : 6000, cfg.think), f.kept);
+        report = pp.report; kept = pp.kept; excluded = excluded.concat(pp.moved);
+        sLlm('ok', pp.moved.length ? '又筛掉 ' + pp.moved.length + ' 条' : '');
+      } catch (e) {
+        sLlm('fail', e.message);
+        notices.push('归纳这一步失败：' + e.message + '。下面是过滤后的原始条目。');
+      }
+    } else sLlm('skip', anyLLM() ? '模型不可用' : '没填 key，跳过');
+    return { report, kept, excluded };
+  }
+  function makeState(c, f, res, notices) {
+    return {
+      t: c.now, desc: c.desc, hours: c.hours, product: c.parsed.product, report: res.report, kept: res.kept, excluded: res.excluded,
+      stats: Object.assign({}, f.stats, { kept: res.kept.length, excluded: res.excluded.length }),
+      links: C.buildDeepLinks(c.parsed), usage: Object.assign({}, usage), notices, live: true,
+    };
+  }
+
+  /* ---------- 补充材料：把自己在 Reddit、X 或群里看到的内容粘贴进来，并入证据后重新归纳 ---------- */
+  function pasteCard(n) {
+    const sel = h('select', { id: 'pSrc' }, Object.keys(C.PASTE_SOURCES).map((k) => h('option', { value: k }, C.PASTE_SOURCES[k].name)));
+    const ta = h('textarea', { id: 'pText', rows: '5', placeholder: '把你在 Reddit、X 或群里看到的内容粘贴到这里。夹着按钮、导航文字也没关系。' });
+    const btn = h('button', { id: 'pGo', class: 'primary', type: 'button', onclick: () => addPaste(sel.value, ta.value) }, '并入证据，重新归纳');
+    return h('details', { class: 'card paste' },
+      h('summary', null, '补充材料（可选）' + (n ? ' · 已并入 ' + n + ' 条' : '')),
+      h('p', { class: 'hint' }, '搜索抓不到的内容可以手动补进来：点上面的直达链接，复制你看到的帖子，粘贴到这里。不用也不影响结论。不想看到这一块，可以在「设置」里关掉。'),
+      h('label', { class: 'lab', for: 'pSrc' }, '内容来自'), sel,
+      h('label', { class: 'lab', for: 'pText' }, '内容'), ta,
+      h('div', { class: 'row end' }, btn),
+      h('p', { class: 'hint', id: 'pMsg' }));
+  }
+  async function addPaste(srcKey, text) {
+    text = String(text || '').trim();
+    const say = (t) => { const m = $('pMsg'); if (m) m.textContent = t; };
+    if (running || !lastRun) return;
+    if (text.length < 20) { say('内容太短，至少粘贴一条完整的帖子。'); return; }
+    const c = lastRun, src = C.PASTE_SOURCES[srcKey] || C.PASTE_SOURCES.other;
+    running = true; $('go').disabled = true;
+    const btn = $('pGo');
+    if (btn) { btn.disabled = true; btn.textContent = '正在处理…'; }
+    const add = progress();
+    const notices = c.baseNotices.slice();
+    usage.fallback = '';
+    try {
+      const sSplit = add('拆分粘贴内容');
+      sSplit('run');
+      let posts;
+      try {
+        const out = await chatJson(C.pasteMessages(text, src.name, c.parsed.product, Date.now(), tzMin()), 6000, false);
+        posts = Array.isArray(out.posts) ? out.posts : [];
+      } catch (e) { sSplit('fail', e.message); say('拆分失败：' + e.message); return; }
+      const name = srcKey === 'reddit' ? 'Reddit' : srcKey === 'x' ? 'X' : '';
+      const linkOf = C.buildDeepLinks(c.parsed).find((l) => l.name === name);
+      const items = posts.slice(0, 30).map((p) => C.fromPaste(p, srcKey, Date.now(), linkOf ? linkOf.url : '')).filter(Boolean);
+      if (!items.length) { sSplit('warn', '没认出帖子'); say('没从这段内容里认出和「' + c.parsed.product + '」有关的帖子。'); return; }
+      const have = new Set(c.pasted.map((i) => i.canonKey));
+      items.forEach((i) => { if (!have.has(i.canonKey)) { have.add(i.canonKey); c.pasted.push(i); } });
+      sSplit('ok', '认出 ' + items.length + ' 条' + (text.length > 20000 ? '（内容太长，只处理了前 20000 字）' : ''));
+
+      const sFilter = add('去重过滤');
+      const f = C.applyFilters(c.raw.concat(c.pasted), C.makeCtx(c.parsed, c.hours, c.now));
+      const tooOld = f.excluded.filter((e) => e.pasted && e.reason === 'old').length;
+      sFilter('ok', '留下 ' + f.kept.length + ' 条，其中你粘贴的 ' + f.kept.filter((k) => k.pasted).length + ' 条' + (tooOld ? '；另有 ' + tooOld + ' 条粘贴内容超出时间范围，没有并入' : ''));
+
+      const res = await analyze(c, f, add('语义筛选与归纳'), true, notices);
+      if (usage.fallback) notices.push(usage.fallback);
+      const state = makeState(c, f, res, notices);
+      render(state);
+      saveHistory(state, true);
+    } catch (e) {
+      say('出错了：' + (e && e.message ? e.message : String(e)));
+    } finally {
+      running = false; $('go').disabled = false;
+      const b = $('pGo');
+      if (b) { b.disabled = false; b.textContent = '并入证据，重新归纳'; }
     }
   }
 
@@ -476,8 +545,8 @@
       if (it.points) meta.push(it.points + ' 赞');
       const snip = it.text ? h('p', { class: 'snip' }, it.text) : null;
       const el = h('article', { class: 'ev', id: 'ev-' + it.id },
-        h('div', { class: 'ev-head' }, h('span', { class: 'ev-id' }, '[' + it.id + ']'), chip(C.TYPE_ZH[it.type] || it.type, TYPE_CHIP[it.type])),
-        link(it.url, it.title, 'ev-title'),
+        h('div', { class: 'ev-head' }, h('span', { class: 'ev-id' }, '[' + it.id + ']'), chip(C.TYPE_ZH[it.type] || it.type, TYPE_CHIP[it.type]), it.pasted ? chip('你粘贴的', 'amber') : null),
+        it.url ? link(it.url, it.title, 'ev-title') : h('span', { class: 'ev-title' }, it.title),
         h('p', { class: 'meta' }, meta.filter(Boolean).join(' · ')),
         snip);
       if (snip && it.text.length > 90) {
@@ -505,7 +574,7 @@
     d.append(h('p', { class: 'hint' }, parts.join('；')));
     if (st.excluded && st.excluded.length) {
       const list = st.excluded.filter((e) => e.reason !== 'dup').slice(0, 80);
-      d.append(h('ul', { class: 'excl-list' }, list.map((e) => h('li', null, link(e.url, e.title || e.url), h('span', { class: 'why' }, ' · ' + (C.REASON[e.reason] || e.reason) + (e.host ? ' · ' + e.host : ''))))));
+      d.append(h('ul', { class: 'excl-list' }, list.map((e) => h('li', null, e.url ? link(e.url, e.title || e.url) : e.title, h('span', { class: 'why' }, ' · ' + (C.REASON[e.reason] || e.reason) + (e.host ? ' · ' + e.host : '') + (e.pasted ? ' · 你粘贴的' : ''))))));
       if (by.dup) d.append(h('p', { class: 'hint' }, '「同一链接」的 ' + by.dup + ' 条是多条查询搜到了同一页，不逐条列出。'));
     } else d.append(h('p', { class: 'hint' }, '历史记录里只保留了数量，没有保留被排除的条目。'));
     s.append(d); box.append(s);
@@ -524,6 +593,7 @@
     ls.append(h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'Reddit 和 X 不让页面直接抓取，只能靠搜索引擎收录。这次证据里 Reddit ' + sc.Reddit + ' 条、X ' + sc.X + ' 条' + (sc.Reddit + sc.X < 2 ? '，建议点开看一眼最新帖子。' : '。')));
     ls.append(h('div', { class: 'links' }, (st.links || []).map((l) => link(l.url, l.name))));
     box.append(ls);
+    if (st.live && lastRun && cfg.paste !== false && anyLLM()) box.append(pasteCard(st.kept.filter((k) => k.pasted).length));
     renderEvidence(box, st);
     renderExcluded(box, st);
     box.append(h('p', { class: 'usage' }, '查询于 ' + C.fmtLocal(st.t, tzMin()) + ' · 时间范围 ' + (st.hours >= 48 ? st.hours / 24 + ' 天' : st.hours + ' 小时') +
@@ -536,11 +606,12 @@
     return {
       t: st.t, desc: st.desc, hours: st.hours, product: st.product, report: st.report, links: st.links, usage: st.usage, notices: st.notices,
       stats: st.stats,
-      kept: st.kept.map((it) => ({ id: it.id, type: it.type, src: it.src, title: it.title, url: it.url, host: it.host, ts: it.ts, text: C.clip(it.text, 300), similar: it.similar, comments: it.comments, points: it.points, rel: it.rel })),
+      kept: st.kept.map((it) => ({ id: it.id, type: it.type, src: it.src, title: it.title, url: it.url, host: it.host, ts: it.ts, text: C.clip(it.text, 300), similar: it.similar, comments: it.comments, points: it.points, rel: it.rel, pasted: it.pasted || undefined })),
     };
   }
-  function saveHistory(st) {
+  function saveHistory(st, replace) {
     const list = store.get(LS.hist, []);
+    if (replace && list.length && list[0].t === st.t) list.shift();
     list.unshift(slim(st));
     while (list.length > 8) list.pop();
     while (!store.set(LS.hist, list) && list.length > 1) list.pop();
@@ -627,6 +698,7 @@
   function openSettings() {
     $('sProvider').value = cfg.provider === 'gemini' ? 'gemini' : 'deepseek';
     $('sKey').value = cfg.key; $('sGKey').value = cfg.gKey || ''; $('sBase').value = cfg.base; $('sThink').checked = !!cfg.think;
+    $('sPaste').checked = cfg.paste !== false;
     $('sModelHint').textContent = MODEL_HINT;
     draft = { deepseek: cfg.model || DEFAULTS.model, gemini: cfg.gModel || DEFAULTS.gModel };
     const p = curProvider();
@@ -645,6 +717,9 @@
     cfg.model = draft.deepseek || DEFAULTS.model;
     cfg.gModel = draft.gemini || DEFAULTS.gModel;
     cfg.think = $('sThink').checked;
+    cfg.paste = $('sPaste').checked;
+    const card = document.querySelector('.card.paste');
+    if (card && !cfg.paste) card.remove();
     if (!store.set(LS.cfg, cfg)) alertText('浏览器不允许保存设置（可能是无痕模式），这次打开期间仍然有效。');
     updateHint();
   }
