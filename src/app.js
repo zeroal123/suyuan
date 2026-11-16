@@ -537,6 +537,7 @@
     $('desc').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) run(); });
     $('btnSet').addEventListener('click', openSettings);
     $('sTest').addEventListener('click', selfTest);
+    $('sCancel').addEventListener('click', () => $('dlg').close('cancel'));
     $('sClear').addEventListener('click', () => { store.set(LS.hist, []); renderHistory(); $('sTestOut').replaceChildren(h('li', { class: 'st-ok' }, h('span', { class: 'ic' }, ICON.ok), h('div', null, '历史已清空'))); });
     $('dlg').addEventListener('close', () => { if ($('dlg').returnValue === 'save') saveSettings(); });
   }

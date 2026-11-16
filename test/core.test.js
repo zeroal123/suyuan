@@ -62,6 +62,9 @@ test('classifySource 区分官方、社区、聚合站、新闻', () => {
   assert.equal(C.classifySource({ url: 'https://www.technobezz.com/news/claude-service-incident-d8', title: 'Claude Reports Elevated Errors' }, c), 'news');
   const other = C.makeCtx(C.normalizeParsed({ product: 'Notion', symptoms_en: ['sync error'] }, 'Notion 同步报错', {}), 48, NOW);
   assert.equal(C.classifySource({ url: 'https://status.notion.so/incidents/1', title: 'Sync delays' }, other), 'official');
+  assert.equal(C.classifySource({ url: 'https://notion.statuspage.io/incidents/1', title: 'Sync delays' }, other), 'official');
+  assert.equal(C.classifySource({ url: 'https://status.other.com/incidents/1', title: 'Notion sync delays' }, other), 'aggregator');
+  assert.equal(C.classifySource({ url: 'https://download.example.com/notion-fix', title: 'Notion sync error fix' }, other), 'news');
 });
 
 test('heuristicParse 无 key 时也能拆出产品、症状和报错原文', () => {
@@ -92,7 +95,8 @@ test('buildQueries 拆成多条细查询，长度合规且不重复', () => {
   assert.match(all, /site:reddit\.com/);
   assert.match(all, /site:x\.com/);
   assert.match(all, /"overloaded_error"/);
-  assert.match(all, /after:2026-11-14/);
+  assert.match(all, /after:2026-11-13/);
+  assert.ok(!/after:2026-11-1[4-9]/.test(all), '48 小时窗口要多留一天余量');
   assert.match(all, /lang:zh/);
   assert.ok(qs.some((q) => q.upstream));
   const noErr = C.buildQueries(Object.assign({}, parsed, { errors: [] }), 48, NOW);

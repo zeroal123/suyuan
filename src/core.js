@@ -204,7 +204,8 @@
   /* ---------------- 查询生成 ---------------- */
   function buildQueries(p, windowHours, now) {
     const day = (h) => new Date(now - h * HOUR).toISOString().slice(0, 10);
-    const d = day(windowHours), dw = day(Math.max(windowHours, 168));
+    // after: 多留一天余量：边界当天算不算在内各家搜索引擎不一样，精确的时间过滤在本地做
+    const d = day(windowHours + 24), dw = day(Math.max(windowHours, 168) + 24);
     const P = p.product;
     const s1 = p.symptoms_en[0] || 'not working';
     const s2 = p.symptoms_en[1];
@@ -323,7 +324,7 @@
     'discord.com', 'weibo.com', 'nodeseek.com', 'hostloc.com', 'threads.net', 'threads.com', 'mastodon.social', 'lemmy.world',
     'douban.com', 'coolapk.com', 'nga.cn', 'steamcommunity.com', 'tildes.net', 'quora.com', 'facebook.com', 'youtube.com', 'bilibili.com', 't.me'];
   /* 聚合站：自动转抄状态页或收集「我也挂了」点击数的站。按域名、路径、标题三种特征识别。 */
-  const AGG_HOST = /(status|down|outage|uptime|pulsetic|claudenetwork|visualsentinel|notopening)/i;
+  const AGG_HOST = /(status|down(?!load)|outage|uptime|pulsetic|claudenetwork|visualsentinel|notopening)/i;
   const AGG_PATH = /\/(provider-)?status(\/|$)|\/outages?(\/|$)|\/is-[a-z0-9-]*-down/i;
   const AGG_TITLE = /^is .{1,40} down\b|(outage|status) (tracker|history|map|checker|monitor)|status\s*(&|and)\s*outage|down right now|live (service )?status|current status|is it down/i;
   function pathOf(raw) { try { return new URL(String(raw).trim()).pathname; } catch (e) { return ''; } }
@@ -334,7 +335,8 @@
     const host = hostOf(it.url);
     if (ctx && ctx.officialHosts && hostIn(host, ctx.officialHosts)) return 'official';
     // 注册表里没有的产品：status.<厂商域名> 这种写法按官方状态页处理
-    if (ctx && /^status\./.test(host) && (ctx.names || []).some((n) => host.indexOf(n.toLowerCase().replace(/[^a-z0-9]/g, '')) > 6)) return 'official';
+    const nameIn = (h) => (ctx.names || []).some((n) => { const k = n.toLowerCase().replace(/[^a-z0-9]/g, ''); return k.length >= 3 && h.indexOf(k) >= 0; });
+    if (ctx && ((/^status\./.test(host) && nameIn(host.slice(7))) || (/\.statuspage\.io$/.test(host) && nameIn(host)))) return 'official';
     if (hostIn(host, COMMUNITY) || /^(community|forum|forums|discuss|discourse|bbs|ask|answers)\./.test(host)) return 'community';
     if (AGG_HOST.test(host) || AGG_PATH.test(pathOf(it.url)) || AGG_TITLE.test(it.title || '')) return 'aggregator';
     return 'news';

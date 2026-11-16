@@ -119,9 +119,19 @@ async function setup(browser, opts = {}) {
   });
   await page.goto(ORIGIN);
   if (opts.key) {
+    // 用键盘回车保存：手机上粘贴完 key 直接按「前往」就是这个路径
     await page.click('#btnSet');
     await page.fill('#sKey', 'sk-test');
-    await page.click('#sSave');
+    await page.press('#sKey', 'Enter');
+    // 弹窗的 close 事件是异步触发的，等它把设置写进去；写不进去就会在这里超时失败
+    const savedKey = () => page.evaluate(() => (JSON.parse(localStorage.getItem('suyuan.cfg') || '{}')).key);
+    await page.waitForFunction(() => (JSON.parse(localStorage.getItem('suyuan.cfg') || '{}')).key === 'sk-test', null, { timeout: 5000 });
+    await page.click('#btnSet');
+    await page.fill('#sKey', 'should-not-be-saved');
+    await page.click('#sCancel');
+    await page.waitForFunction(() => !document.getElementById('dlg').open);
+    await page.waitForTimeout(100);
+    assert.equal(await savedKey(), 'sk-test', '取消不保存');
   }
   return { page, log, ctx };
 }

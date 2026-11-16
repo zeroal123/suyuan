@@ -58,10 +58,11 @@
 
 <footer class="foot">
   <p>纯前端页面，没有服务器。key 和历史只存在这台设备的浏览器里。</p>
+  <p>版本 2026-11-16</p>
 </footer>
 
 <dialog id="dlg">
-  <form method="dialog" class="dlg">
+  <form method="dialog" class="dlg" novalidate>
     <h2>设置</h2>
     <label class="lab" for="sKey">DeepSeek API key</label>
     <input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…">
@@ -81,7 +82,7 @@
     </div>
     <ul id="sTestOut" class="plist"></ul>
     <div class="row end">
-      <button value="cancel" class="ghost">取消</button>
+      <button id="sCancel" type="button" class="ghost">取消</button>
       <button id="sSave" value="save" class="primary">保存</button>
     </div>
   </form>
