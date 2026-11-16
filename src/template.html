@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15171a" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="故障溯源">
+<meta name="referrer" content="no-referrer">
+<title>故障溯源</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231f5c56'/%3E%3Ccircle cx='28' cy='28' r='13' fill='none' stroke='%23fff' stroke-width='6'/%3E%3Cpath d='M38 38l13 13' stroke='%23fff' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>故障溯源</h1>
+    <p class="sub">描述情况，找原因，看别人是不是也这样</p>
+  </div>
+  <button id="btnSet" class="ghost" type="button">设置</button>
+</header>
+
+<main>
+  <section class="card" id="ask">
+    <label class="lab" for="desc">出了什么事</label>
+    <textarea id="desc" rows="3" placeholder="例：Claude 今天下午突然一直报错 overloaded，手机和电脑都一样"></textarea>
+    <div class="row">
+      <label class="inline">时间范围
+        <select id="win">
+          <option value="6">6 小时</option>
+          <option value="24">24 小时</option>
+          <option value="48">48 小时</option>
+          <option value="168">7 天</option>
+        </select>
+      </label>
+      <button id="go" class="primary" type="button">开始查</button>
+    </div>
+    <details id="adv">
+      <summary>手动指定（可选）</summary>
+      <label class="lab" for="mProduct">产品名</label>
+      <input id="mProduct" type="text" autocomplete="off" placeholder="如 Claude">
+      <label class="lab" for="mKw">关键词</label>
+      <input id="mKw" type="text" autocomplete="off" placeholder="英文更好，逗号分隔，如 error, overloaded">
+      <label class="lab" for="mStatus">官方状态页</label>
+      <input id="mStatus" type="url" autocomplete="off" placeholder="https://status.example.com">
+    </details>
+    <p id="modeHint" class="hint"></p>
+  </section>
+
+  <section class="card" id="progress" hidden></section>
+  <section id="result" hidden></section>
+  <section id="history"></section>
+</main>
+
+<footer class="foot">
+  <p>纯前端页面，没有服务器。key 和历史只存在这台设备的浏览器里。</p>
+</footer>
+
+<dialog id="dlg">
+  <form method="dialog" class="dlg">
+    <h2>设置</h2>
+    <label class="lab" for="sKey">DeepSeek API key</label>
+    <input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…">
+    <p class="hint">用于拆解描述、联网搜索和归纳。不填也能用，但只有抓取和过滤，没有结论。</p>
+    <label class="lab" for="sBase">接口地址</label>
+    <input id="sBase" type="url" autocomplete="off" spellcheck="false">
+    <p class="hint">默认直连 DeepSeek。如果自检显示被跨域策略拦截，可以换成你自己的转发地址。</p>
+    <label class="lab" for="sModel">模型</label>
+    <select id="sModel">
+      <option value="deepseek-flash">deepseek-flash（快，便宜）</option>
+      <option value="deepseek-v4-pro">deepseek-v4-pro（更强，更贵）</option>
+    </select>
+    <label class="check"><input id="sThink" type="checkbox"> 归纳时开启深度思考（更慢）</label>
+    <div class="row">
+      <button id="sTest" class="ghost" type="button">连接自检</button>
+      <button id="sClear" class="ghost danger" type="button">清空历史</button>
+    </div>
+    <ul id="sTestOut" class="plist"></ul>
+    <div class="row end">
+      <button value="cancel" class="ghost">取消</button>
+      <button id="sSave" value="save" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+/*__CORE__*/
+</script>
+<script>
+/*__APP__*/
+</script>
+</body>
+</html>

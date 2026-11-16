@@ -1,0 +1,1461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15171a" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="故障溯源">
+<meta name="referrer" content="no-referrer">
+<title>故障溯源</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231f5c56'/%3E%3Ccircle cx='28' cy='28' r='13' fill='none' stroke='%23fff' stroke-width='6'/%3E%3Cpath d='M38 38l13 13' stroke='%23fff' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f6f4ef; --card: #fffdf9; --ink: #1c1d1f; --mute: #6a6c70; --line: #e2ded4;
+  --accent: #1f5c56; --accent-ink: #fff; --soft: #eef3f1;
+  --red: #b3402e; --amber: #a86a12; --blue: #3a5fa8; --teal: #1f6e68; --gray: #6a6c70;
+  --red-bg: #f9e9e5; --amber-bg: #f8eedb; --blue-bg: #e8eef9; --teal-bg: #e2f1ef; --gray-bg: #ecebe7;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", "Noto Sans SC", "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a; --card: #1d2024; --ink: #e9e7e2; --mute: #9a9da3; --line: #30343a;
+    --accent: #5fb8ae; --accent-ink: #0e1d1b; --soft: #1f2a29;
+    --red: #f08a78; --amber: #e3b05c; --blue: #8fb0f0; --teal: #6fcdc3; --gray: #9a9da3;
+    --red-bg: #3a211d; --amber-bg: #372b17; --blue-bg: #1e2941; --teal-bg: #173231; --gray-bg: #2a2d32;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 var(--sans); padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+main, .top, .foot { max-width: 720px; margin: 0 auto; padding: 0 16px; }
+.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding-top: calc(20px + env(safe-area-inset-top)); padding-bottom: 12px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: .02em; }
+.sub { margin: 2px 0 0; color: var(--mute); font-size: 13px; }
+h2 { font-size: 15px; margin: 0 0 8px; letter-spacing: .04em; color: var(--mute); font-weight: 600; }
+h3 { font-size: 16px; margin: 0; }
+p { margin: 0 0 8px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin: 0 0 12px; }
+.lab { display: block; font-size: 13px; color: var(--mute); margin: 10px 0 4px; }
+#ask > .lab:first-child { margin-top: 0; }
+textarea, input[type=text], input[type=url], input[type=password], select {
+  width: 100%; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-height: 44px;
+}
+textarea { resize: vertical; display: block; }
+textarea:focus, input:focus, select:focus, button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.row { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-top: 10px; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; }
+.inline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mute); }
+.inline select { width: auto; }
+.check { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; font-size: 14px; }
+.check input { width: 18px; height: 18px; }
+button { font: inherit; border-radius: 10px; min-height: 44px; padding: 0 16px; cursor: pointer; border: 1px solid transparent; }
+button:disabled { opacity: .55; cursor: default; }
+.primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+.ghost.danger { color: var(--red); }
+details > summary { cursor: pointer; color: var(--mute); font-size: 14px; padding: 10px 0 2px; min-height: 36px; }
+.hint { color: var(--mute); font-size: 13px; margin: 8px 0 0; }
+.hint:empty { display: none; }
+
+/* 进度 */
+.plist { list-style: none; margin: 0; padding: 0; }
+.plist li { display: grid; grid-template-columns: 20px 1fr; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 14px; }
+.plist .ic { font-family: var(--mono); text-align: center; }
+.plist .note { color: var(--mute); font-size: 13px; }
+.st-run .ic { color: var(--accent); animation: blink 1s infinite; }
+.st-ok .ic { color: var(--teal); }
+.st-fail .ic, .st-fail .note { color: var(--red); }
+.st-warn .ic, .st-warn .note { color: var(--amber); }
+.st-skip { color: var(--mute); }
+@keyframes blink { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .st-run .ic { animation: none; } }
+
+/* 结论 */
+.verdict { border-left: 5px solid var(--gray); }
+.verdict.v-widespread { border-left-color: var(--red); }
+.verdict.v-official_change { border-left-color: var(--blue); }
+.verdict.v-likely_local { border-left-color: var(--teal); }
+.verdict.v-mixed { border-left-color: var(--amber); }
+.headline { font-size: 18px; font-weight: 650; line-height: 1.45; margin: 8px 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { display: inline-flex; align-items: center; font-size: 12px; line-height: 1; padding: 5px 8px; border-radius: 999px; background: var(--gray-bg); color: var(--gray); white-space: nowrap; }
+.chip.red { background: var(--red-bg); color: var(--red); }
+.chip.amber { background: var(--amber-bg); color: var(--amber); }
+.chip.blue { background: var(--blue-bg); color: var(--blue); }
+.chip.teal { background: var(--teal-bg); color: var(--teal); }
+.cause { padding: 10px 0; border-top: 1px solid var(--line); }
+.cause:first-of-type { border-top: 0; padding-top: 0; }
+.cause h3 { margin-bottom: 6px; }
+.cause p { margin: 6px 0 0; font-size: 15px; }
+.refs { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 4px; vertical-align: baseline; }
+.ref { font-family: var(--mono); font-size: 12px; min-height: 26px; min-width: 30px; padding: 0 6px; border-radius: 6px; background: var(--soft); color: var(--accent); border: 1px solid transparent; }
+.tl { list-style: none; margin: 0; padding: 0; }
+.tl li { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 5px 0; font-size: 15px; }
+.tl time { font-family: var(--mono); font-size: 13px; color: var(--mute); padding-top: 2px; }
+.kv { margin: 0; }
+.kv dt { font-size: 13px; color: var(--mute); margin-top: 8px; }
+.kv dt:first-child { margin-top: 0; }
+.kv dd { margin: 0; font-size: 15px; }
+ol.acts { margin: 0; padding-left: 22px; }
+ol.acts li { margin: 0 0 8px; font-size: 15px; }
+ol.acts small { display: block; color: var(--mute); font-size: 13px; }
+ul.plain { margin: 0; padding-left: 20px; font-size: 15px; }
+.links { display: flex; flex-wrap: wrap; gap: 8px; }
+.links a { display: inline-flex; align-items: center; min-height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; text-decoration: none; font-size: 14px; background: var(--bg); }
+
+/* 证据 */
+.ev { padding: 12px 0; border-top: 1px solid var(--line); scroll-margin-top: 12px; }
+.ev:first-of-type { border-top: 0; padding-top: 0; }
+.ev.flash { animation: flash 1.6s; }
+@keyframes flash { 0%, 60% { background: var(--soft); } 100% { background: transparent; } }
+.ev-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.ev-id { font-family: var(--mono); font-size: 12px; color: var(--accent); background: var(--soft); border-radius: 6px; padding: 3px 6px; }
+.ev-title { display: block; font-size: 15px; font-weight: 600; line-height: 1.45; text-decoration: none; color: var(--ink); overflow-wrap: anywhere; }
+.ev-title:hover { text-decoration: underline; }
+.meta { font-size: 12.5px; color: var(--mute); margin: 2px 0 0; overflow-wrap: anywhere; }
+.snip { font-size: 14px; color: var(--ink); opacity: .86; margin: 6px 0 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.snip.open { display: block; }
+.more { background: none; border: 0; color: var(--accent); padding: 0; min-height: 32px; font-size: 13px; }
+.sim { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+.sim li { margin: 3px 0; overflow-wrap: anywhere; }
+.excl summary { font-size: 14px; }
+.excl-list { list-style: none; margin: 8px 0 0; padding: 0; font-size: 13px; }
+.excl-list li { padding: 6px 0; border-top: 1px dashed var(--line); overflow-wrap: anywhere; }
+.excl-list .why { color: var(--mute); }
+.notice { background: var(--amber-bg); color: var(--amber); border-radius: 10px; padding: 10px 12px; font-size: 14px; margin: 0 0 12px; }
+.err { background: var(--red-bg); color: var(--red); }
+.usage { font-size: 12.5px; color: var(--mute); margin: 0 0 12px; text-align: right; }
+
+/* 历史 */
+.hist { list-style: none; margin: 0; padding: 0; }
+.hist li { border-top: 1px solid var(--line); }
+.hist li:first-child { border-top: 0; }
+.hist button { width: 100%; text-align: left; background: none; border: 0; color: inherit; padding: 10px 0; min-height: 48px; }
+.hist .d { display: block; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist .m { display: block; font-size: 12.5px; color: var(--mute); }
+
+.foot { color: var(--mute); font-size: 12.5px; padding-top: 4px; padding-bottom: 28px; }
+dialog { border: 1px solid var(--line); border-radius: 16px; background: var(--card); color: var(--ink); padding: 0; width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); }
+dialog::backdrop { background: rgba(0, 0, 0, .45); }
+.dlg { padding: 18px; }
+.dlg h2 { font-size: 18px; color: var(--ink); }
+#sTestOut { margin-top: 8px; }
+
+</style>
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>故障溯源</h1>
+    <p class="sub">描述情况，找原因，看别人是不是也这样</p>
+  </div>
+  <button id="btnSet" class="ghost" type="button">设置</button>
+</header>
+
+<main>
+  <section class="card" id="ask">
+    <label class="lab" for="desc">出了什么事</label>
+    <textarea id="desc" rows="3" placeholder="例：Claude 今天下午突然一直报错 overloaded，手机和电脑都一样"></textarea>
+    <div class="row">
+      <label class="inline">时间范围
+        <select id="win">
+          <option value="6">6 小时</option>
+          <option value="24">24 小时</option>
+          <option value="48">48 小时</option>
+          <option value="168">7 天</option>
+        </select>
+      </label>
+      <button id="go" class="primary" type="button">开始查</button>
+    </div>
+    <details id="adv">
+      <summary>手动指定（可选）</summary>
+      <label class="lab" for="mProduct">产品名</label>
+      <input id="mProduct" type="text" autocomplete="off" placeholder="如 Claude">
+      <label class="lab" for="mKw">关键词</label>
+      <input id="mKw" type="text" autocomplete="off" placeholder="英文更好，逗号分隔，如 error, overloaded">
+      <label class="lab" for="mStatus">官方状态页</label>
+      <input id="mStatus" type="url" autocomplete="off" placeholder="https://status.example.com">
+    </details>
+    <p id="modeHint" class="hint"></p>
+  </section>
+
+  <section class="card" id="progress" hidden></section>
+  <section id="result" hidden></section>
+  <section id="history"></section>
+</main>
+
+<footer class="foot">
+  <p>纯前端页面，没有服务器。key 和历史只存在这台设备的浏览器里。</p>
+</footer>
+
+<dialog id="dlg">
+  <form method="dialog" class="dlg">
+    <h2>设置</h2>
+    <label class="lab" for="sKey">DeepSeek API key</label>
+    <input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…">
+    <p class="hint">用于拆解描述、联网搜索和归纳。不填也能用，但只有抓取和过滤，没有结论。</p>
+    <label class="lab" for="sBase">接口地址</label>
+    <input id="sBase" type="url" autocomplete="off" spellcheck="false">
+    <p class="hint">默认直连 DeepSeek。如果自检显示被跨域策略拦截，可以换成你自己的转发地址。</p>
+    <label class="lab" for="sModel">模型</label>
+    <select id="sModel">
+      <option value="deepseek-flash">deepseek-flash（快，便宜）</option>
+      <option value="deepseek-v4-pro">deepseek-v4-pro（更强，更贵）</option>
+    </select>
+    <label class="check"><input id="sThink" type="checkbox"> 归纳时开启深度思考（更慢）</label>
+    <div class="row">
+      <button id="sTest" class="ghost" type="button">连接自检</button>
+      <button id="sClear" class="ghost danger" type="button">清空历史</button>
+    </div>
+    <ul id="sTestOut" class="plist"></ul>
+    <div class="row end">
+      <button value="cancel" class="ghost">取消</button>
+      <button id="sSave" value="save" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+/* 故障溯源 · 纯逻辑（不碰网络和界面，可在 node 里单测） */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.Core = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const HOUR = 3600e3;
+  const DAY = 24 * HOUR;
+  const uniq = (a) => Array.from(new Set(a));
+  const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pad = (n) => String(n).padStart(2, '0');
+
+  /* ---------------- 链接归一 ---------------- */
+  const TRACKING = /^(utm_[a-z0-9_]+|fbclid|gclid|igshid|ref_src|ref_url|mc_cid|mc_eid|spm|share_id|rdt|cmpid|ref)$/i;
+  const HOST_PREFIX = /^(www|m|mobile|old|new|np|amp)\./;
+
+  function normHost(h) {
+    h = String(h || '').toLowerCase().replace(HOST_PREFIX, '');
+    if (h === 'twitter.com' || h === 'fxtwitter.com' || h === 'vxtwitter.com' || h === 'nitter.net') h = 'x.com';
+    return h;
+  }
+  function hostOf(raw) {
+    try { return normHost(new URL(String(raw).trim()).hostname); } catch (e) { return ''; }
+  }
+  function canonicalUrl(raw) {
+    let u;
+    try { u = new URL(String(raw).trim()); } catch (e) { return String(raw || '').trim().toLowerCase(); }
+    const host = normHost(u.hostname);
+    const path = u.pathname.replace(/\/index\.html?$/i, '/').replace(/\/+$/, '');
+    let m;
+    if (host === 'reddit.com' && (m = path.match(/^\/r\/([^/]+)\/comments\/([a-z0-9]+)/i))) {
+      return 'reddit.com/r/' + m[1].toLowerCase() + '/comments/' + m[2].toLowerCase();
+    }
+    if (host === 'x.com' && (m = path.match(/^\/[^/]+\/status(?:es)?\/(\d+)/i))) return 'x.com/status/' + m[1];
+    if (host === 'github.com' && (m = path.match(/^\/([^/]+)\/([^/]+)\/(issues|pull|discussions)\/(\d+)/i))) {
+      return 'github.com/' + m[1].toLowerCase() + '/' + m[2].toLowerCase() + '/' + m[3] + '/' + m[4];
+    }
+    if (host === 'news.ycombinator.com' && u.searchParams.get('id')) {
+      return 'news.ycombinator.com/item?id=' + u.searchParams.get('id');
+    }
+    const keep = [];
+    u.searchParams.forEach((v, k) => {
+      if (TRACKING.test(k)) return;
+      if (host === 'x.com' && (k === 's' || k === 't')) return;
+      keep.push([k, v]);
+    });
+    keep.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const qs = keep.map((kv) => kv[0] + '=' + kv[1]).join('&');
+    return host + path + (qs ? '?' + qs : '');
+  }
+
+  /* ---------------- 分词与相似度 ---------------- */
+  const STOP = new Set(('a an the is are was were be been am to of in on at for and or it its this that these those with ' +
+    'my me i you your we our they their he she his her as by from so do does did has have had just any anyone else ' +
+    'there here what when why how if then than but about into out up').split(' '));
+
+  function tokens(s) {
+    const out = new Set();
+    const t = String(s || '').normalize('NFKC').toLowerCase();
+    const latin = t.match(/[a-z0-9][a-z0-9._-]*[a-z0-9]|[a-z0-9]/g) || [];
+    for (const w of latin) if (!STOP.has(w)) out.add(w);
+    const runs = t.match(/[㐀-鿿぀-ヿ가-힯]+/g) || [];
+    for (const run of runs) {
+      if (run.length === 1) out.add(run);
+      for (let i = 0; i < run.length - 1; i++) out.add(run.slice(i, i + 2));
+    }
+    return out;
+  }
+  function jaccard(a, b) {
+    if (!a.size || !b.size) return 0;
+    let inter = 0;
+    for (const x of a) if (b.has(x)) inter++;
+    return inter / (a.size + b.size - inter);
+  }
+
+  /* ---------------- 词表 ---------------- */
+  const GENERIC = new RegExp(
+    '\\b(down|outages?|errors?|issues?|problems?|broken|fail(?:ing|ed|s|ure|ures)?|bugs?|degraded|incidents?|' +
+    'unavailable|slow|timeouts?|crash(?:ing|es|ed)?|stuck|blocked|banned|suspended|overloaded|disruption|' +
+    'maintenance|removed|deprecated|unable|cannot|limit(?:s|ed)?|hangs?|frozen|glitch(?:es)?)\\b|' +
+    'not (?:working|loading|responding)|can[’\']?t|no longer|stopped working|' +
+    '故障|崩|挂了|报错|用不了|无法|打不开|异常|宕机|封|限制|失败|错误|卡|不能用|出问题|炸了|抽风|维护|下线|限额|降智', 'i');
+  /* 「弱」症状词：几乎所有故障帖都会出现，区分不了是不是同一个问题 */
+  const WEAK = /\b(down|outages?|errors?|issues?|problems?|broken|bugs?|fail(?:ing|ed|s|ure|ures)?|unable|cannot)\b|not (?:working|loading|responding)|can[’']?t|故障|报错|错误|出错|用不了|不能用|无法|挂了|崩了|异常/gi;
+  const CHANGE = /\b(chang(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|polic(?:y|ies)|pricing|price|terms|retir(?:e|ed|ing)|sunset|rollout|new limits?)\b|调整|变更|更新|政策|涨价|下架/i;
+  const INFRA = /\b(aws|amazon web services|azure|microsoft|google cloud|gcp|cloudflare|fastly|akamai|cdn|dns|internet)\b/i;
+
+  const ZH_EN = [
+    [/报错|出错|错误/, 'error'],
+    [/用不了|不能用|无法使用|没法用|打不开|进不去|无法访问|连不上/, 'not working'],
+    [/挂了|崩了|宕机|炸了|瘫痪/, 'down outage'],
+    [/很慢|太慢|变慢|卡顿|很卡|转圈|加载不/, 'slow loading'],
+    [/登不上|登录|登陆|验证码/, 'login'],
+    [/封号|被封|封禁|停用/, 'account banned suspended'],
+    [/限额|额度|限流|用量|上限|限制/, 'usage limit'],
+    [/付款|支付|扣费|订阅|续费|退款/, 'billing payment'],
+    [/闪退|崩溃/, 'crash'],
+    [/白屏|空白/, 'blank page'],
+    [/超时/, 'timeout'],
+    [/上传|附件/, 'upload'],
+    [/没反应|不回复|无响应|不出结果/, 'not responding'],
+    [/降智|变笨|质量下降/, 'quality degraded'],
+    [/消失|不见了|没了|下架|下线/, 'removed missing'],
+  ];
+
+  /* ---------------- 已知产品注册表 ----------------
+     status 必须是 Statuspage v2 接口能用的地址；拿不准的只给 statusLink（只做跳转）。 */
+  const REGISTRY = [
+    { names: ['claude', 'anthropic', 'claude code', 'claude.ai'], product: 'Claude', vendor: 'Anthropic', status: 'https://status.claude.com', repos: ['anthropics/claude-code'], hosts: ['anthropic.com', 'claude.com', 'claude.ai'], subs: ['ClaudeAI'] },
+    { names: ['chatgpt', 'openai', 'codex', 'sora', 'gpt'], product: 'ChatGPT', vendor: 'OpenAI', status: 'https://status.openai.com', repos: ['openai/codex'], hosts: ['openai.com', 'chatgpt.com'], subs: ['ChatGPT'] },
+    { names: ['deepseek'], product: 'DeepSeek', vendor: 'DeepSeek', status: 'https://status.deepseek.com', repos: [], hosts: ['deepseek.com'], subs: ['DeepSeek'] },
+    { names: ['gemini', 'ai studio', 'bard'], product: 'Gemini', vendor: 'Google', status: '', statusLink: 'https://aistudio.google.com/status', repos: ['google-gemini/gemini-cli'], hosts: ['blog.google', 'ai.google.dev', 'aistudio.google.com'], subs: ['GeminiAI'] },
+    { names: ['cursor'], product: 'Cursor', vendor: 'Anysphere', status: 'https://status.cursor.com', repos: [], hosts: ['cursor.com'], subs: ['cursor'] },
+    { names: ['copilot', 'github'], product: 'GitHub', vendor: 'GitHub', status: 'https://www.githubstatus.com', repos: [], hosts: ['github.blog', 'githubstatus.com'], subs: ['github'] },
+    { names: ['cloudflare'], product: 'Cloudflare', vendor: 'Cloudflare', status: 'https://www.cloudflarestatus.com', repos: [], hosts: ['cloudflare.com', 'cloudflarestatus.com'], subs: ['CloudFlare'] },
+    { names: ['discord'], product: 'Discord', vendor: 'Discord', status: 'https://discordstatus.com', repos: [], hosts: ['discordstatus.com'], subs: ['discordapp'] },
+    { names: ['reddit'], product: 'Reddit', vendor: 'Reddit', status: 'https://www.redditstatus.com', repos: [], hosts: ['redditstatus.com', 'redditinc.com'], subs: ['help'] },
+    { names: ['vercel'], product: 'Vercel', vendor: 'Vercel', status: 'https://www.vercel-status.com', repos: [], hosts: ['vercel.com', 'vercel-status.com'], subs: ['vercel'] },
+    { names: ['npm'], product: 'npm', vendor: 'GitHub', status: 'https://status.npmjs.org', repos: [], hosts: ['npmjs.org', 'npmjs.com'], subs: ['node'] },
+    { names: ['figma'], product: 'Figma', vendor: 'Figma', status: 'https://status.figma.com', repos: [], hosts: ['figma.com'], subs: ['FigmaDesign'] },
+    { names: ['dropbox'], product: 'Dropbox', vendor: 'Dropbox', status: 'https://status.dropbox.com', repos: [], hosts: ['dropbox.com'], subs: ['dropbox'] },
+    { names: ['digitalocean'], product: 'DigitalOcean', vendor: 'DigitalOcean', status: 'https://status.digitalocean.com', repos: [], hosts: ['digitalocean.com'], subs: ['digital_ocean'] },
+    { names: ['epic games', 'fortnite'], product: 'Epic Games', vendor: 'Epic Games', status: 'https://status.epicgames.com', repos: [], hosts: ['epicgames.com'], subs: ['FortNiteBR'] },
+  ];
+
+  function nameRe(n) {
+    if (/^[\x00-\x7f]+$/.test(n)) return new RegExp('(^|[^a-z0-9])' + escRe(n.toLowerCase()) + '([^a-z0-9]|$)', 'i');
+    return new RegExp(escRe(n), 'i');
+  }
+  function registryFor(text) {
+    const t = String(text || '').toLowerCase();
+    if (!t.trim()) return null;
+    for (const e of REGISTRY) for (const n of e.names) if (nameRe(n).test(t)) return e;
+    return null;
+  }
+
+  /* ---------------- 拆解描述 ---------------- */
+  function extractErrors(desc) {
+    const s = String(desc || '');
+    const out = [];
+    let m;
+    const quoted = /[「『“"'`]([^「」『』“”"'`\n]{3,80})[」』”"'`]/g;
+    while ((m = quoted.exec(s))) if (/[A-Za-z0-9]/.test(m[1])) out.push(m[1].trim());
+    const ident = /[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+/g;
+    while ((m = ident.exec(s))) out.push(m[0]);
+    const code = /(?:error|err|code|错误码?|状态码|http)\s*[:：#]?\s*(\d{3,5})(?!\d)/gi;
+    while ((m = code.exec(s))) out.push(m[1]);
+    return uniq(out).slice(0, 3);
+  }
+
+  function splitList(v) {
+    return String(v || '').split(/[,，、;；\n]+/).map((x) => x.trim()).filter(Boolean);
+  }
+  function validHttp(u) {
+    try { const x = new URL(String(u)); return x.protocol === 'https:' || x.protocol === 'http:' ? x.origin + x.pathname.replace(/\/+$/, '') : ''; } catch (e) { return ''; }
+  }
+
+  function normalizeParsed(o, desc, manual) {
+    o = o || {}; manual = manual || {};
+    const arr = (v, n) => uniq((Array.isArray(v) ? v : (typeof v === 'string' && v ? [v] : []))
+      .map((x) => String(x == null ? '' : x).trim()).filter(Boolean)).slice(0, n);
+    const aliasesIn = arr(o.aliases, 8);
+    const reg = registryFor(manual.product) || registryFor(o.product) || registryFor(aliasesIn.join(' | ')) ||
+      (!manual.product && !o.product ? registryFor(desc) : null);
+    const product = String(manual.product || o.product || (reg && reg.product) || '').trim();
+    const aliases = uniq(aliasesIn.concat(reg ? reg.names : []))
+      .filter((a) => a.toLowerCase() !== product.toLowerCase()).slice(0, 8);
+    const status = validHttp(manual.status) || (reg && reg.status) || (reg ? '' : validHttp(o.status_page)) || '';
+    const officialHosts = uniq((reg ? reg.hosts : []).concat(status ? [hostOf(status)] : []).filter(Boolean));
+    return {
+      product,
+      vendor: String(o.vendor || (reg && reg.vendor) || '').trim(),
+      aliases,
+      symptoms_en: uniq(splitList(manual.keywords).concat(arr(o.symptoms_en, 5))).slice(0, 5),
+      symptoms_zh: arr(o.symptoms_zh, 3),
+      errors: arr(o.errors, 3).filter((e) => e.length >= 3 && e.length <= 80),
+      platform: String(o.platform || '').trim(),
+      status_page: status,
+      status_link: status || (reg && reg.statusLink) || validHttp(o.status_page) || '',
+      github_repos: uniq((reg ? reg.repos : []).concat(arr(o.github_repos, 2)))
+        .filter((r) => /^[\w.-]+\/[\w.-]+$/.test(r)).slice(0, 2),
+      subs: reg && reg.subs ? reg.subs.slice(0, 1) : [],
+      officialHosts,
+      extra_queries: arr(o.extra_queries, 3).map((q) => q.slice(0, 100)),
+    };
+  }
+
+  function heuristicParse(desc, manual) {
+    manual = manual || {};
+    const s = String(desc || '');
+    const reg = registryFor(manual.product) || registryFor(s);
+    let product = manual.product || (reg && reg.product) || '';
+    if (!product) { const m = s.match(/[A-Za-z][A-Za-z0-9.+-]{1,30}/); if (m) product = m[0]; }
+    const en = [], zh = [];
+    for (const pair of ZH_EN) { const m = s.match(pair[0]); if (m) { en.push(pair[1]); zh.push(m[0]); } }
+    const errors = extractErrors(s);
+    const skip = new Set([product.toLowerCase()].concat(reg ? reg.names : [], errors.map((e) => e.toLowerCase())));
+    const words = (s.match(/[A-Za-z][A-Za-z0-9'-]{2,}/g) || [])
+      .filter((w) => !skip.has(w.toLowerCase()) && !STOP.has(w.toLowerCase()) && !errors.some((e) => e.indexOf(w) >= 0));
+    return normalizeParsed({ product, symptoms_en: en.concat(uniq(words).slice(0, 2)), symptoms_zh: zh, errors }, s, manual);
+  }
+
+  /* ---------------- 查询生成 ---------------- */
+  function buildQueries(p, windowHours, now) {
+    const day = (h) => new Date(now - h * HOUR).toISOString().slice(0, 10);
+    const d = day(windowHours), dw = day(Math.max(windowHours, 168));
+    const P = p.product;
+    const s1 = p.symptoms_en[0] || 'not working';
+    const s2 = p.symptoms_en[1];
+    const z1 = p.symptoms_zh[0] || '用不了';
+    const e1 = p.errors[0];
+    const out = [], seen = new Set();
+    const add = (label, core, tail, extra) => {
+      tail = tail ? ' ' + tail : '';
+      let c = String(core).replace(/\s+/g, ' ').trim();
+      const max = 128 - tail.length;
+      if (c.length > max) c = c.slice(0, max).trim();
+      const q = c + tail;
+      if (!c || seen.has(q)) return;
+      seen.add(q);
+      out.push(Object.assign({ label, q }, extra || {}));
+    };
+    add('综合', P + ' ' + s1, 'after:' + d);
+    add('故障词', P + ' outage down not working', 'after:' + d);
+    add('Reddit', P + ' ' + s1, 'site:reddit.com after:' + d);
+    add('X', P + ' ' + s1, 'site:x.com OR site:twitter.com after:' + d);
+    if (e1) add('报错原文', P + ' "' + e1.replace(/"/g, '') + '"', 'after:' + d);
+    if (s2) add('第二症状', P + ' ' + s2, 'after:' + d);
+    add('开发者社区', P + ' ' + s1, 'site:github.com OR site:news.ycombinator.com after:' + d);
+    add('官方通告', P + ' status incident update', 'after:' + dw);
+    add('官方变更', ((p.vendor && p.vendor !== P ? p.vendor + ' ' : '') + P + ' changelog policy change announcement'), 'after:' + dw);
+    add('中文', P + ' ' + z1, 'lang:zh after:' + d);
+    add('中文社区', P + ' ' + z1, 'site:v2ex.com OR site:linux.do OR site:zhihu.com after:' + d);
+    add('上游故障', 'major outage cloudflare aws azure google cloud', 'after:' + d, { upstream: true });
+    (p.extra_queries || []).forEach((q, i) => add('补充' + (i + 1), q, 'after:' + d));
+    return out;
+  }
+
+  function buildDeepLinks(p) {
+    const e = encodeURIComponent;
+    const q = (p.product + ' ' + (p.symptoms_en[0] || '')).trim();
+    const zh = (p.product + ' ' + (p.symptoms_zh[0] || '')).trim();
+    const links = [];
+    if (p.status_link) links.push({ name: '官方状态页', url: p.status_link.replace(/^http:/, 'https:') });
+    links.push({ name: 'Reddit', url: 'https://www.reddit.com/search/?q=' + e(q) + '&sort=new&t=day' });
+    (p.subs || []).forEach((s) => links.push({ name: 'r/' + s + ' 最新', url: 'https://www.reddit.com/r/' + e(s) + '/new/' }));
+    links.push({ name: 'X', url: 'https://x.com/search?q=' + e(q) + '&f=live' });
+    links.push({ name: 'Google 24 小时', url: 'https://www.google.com/search?q=' + e(q) + '&tbs=qdr:d' });
+    links.push({ name: 'Downdetector', url: 'https://downdetector.com/search/?q=' + e(p.product) });
+    links.push({ name: 'GitHub issues', url: 'https://github.com/search?q=' + e(q + ' is:issue') + '&type=issues&s=created&o=desc' });
+    links.push({ name: 'Hacker News', url: 'https://hn.algolia.com/?q=' + e(q) + '&sort=byDate&dateRange=last24h&type=all' });
+    links.push({ name: 'linux.do', url: 'https://linux.do/search?q=' + e(zh + ' order:latest') });
+    links.push({ name: 'V2EX', url: 'https://www.google.com/search?q=' + e(zh + ' site:v2ex.com') + '&tbs=qdr:w' });
+    return links;
+  }
+
+  /* ---------------- 来源适配 ---------------- */
+  const clip = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+  function decodeHtml(s) {
+    return String(s || '').replace(/<[^>]+>/g, ' ')
+      .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+      .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
+      .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+      .replace(/\s+/g, ' ').trim();
+  }
+  function fromDeepseek(r, q) {
+    return {
+      src: 'search', title: clip(r.title, 200), url: String(r.url || ''), text: clip(r.summary || r.snippet || '', 600),
+      date: r.date || null, rerank: typeof r.rerank_score === 'number' ? r.rerank_score : null,
+      authority: typeof r.authority === 'number' ? r.authority : null, site: r.site_name || '',
+      via: (q && q.label) || '', upstream: !!(q && q.upstream),
+    };
+  }
+  function fromGithub(i, fromRepo) {
+    return {
+      src: 'github', title: clip(i.title, 200), url: String(i.html_url || ''), text: clip(i.body || '', 600),
+      date: i.created_at || null, comments: i.comments || 0, points: (i.reactions && i.reactions.total_count) || 0,
+      fromRepo: !!fromRepo, via: 'GitHub',
+    };
+  }
+  function fromHN(h) {
+    return {
+      src: 'hn', title: clip(decodeHtml(h.title || h.story_title || ''), 200),
+      url: 'https://news.ycombinator.com/item?id=' + h.objectID,
+      text: clip(decodeHtml(h.comment_text || h.story_text || ''), 600),
+      date: h.created_at || null, comments: h.num_comments || 0, points: h.points || 0, via: 'Hacker News',
+    };
+  }
+  function fmtLocal(ts, offsetMin) {
+    const d = new Date(ts + (offsetMin || 0) * 60000);
+    return pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()) + ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes());
+  }
+  function tzLabel(offsetMin) {
+    const a = Math.abs(offsetMin);
+    return 'UTC' + (offsetMin < 0 ? '-' : '+') + pad(Math.floor(a / 60)) + ':' + pad(a % 60);
+  }
+  function fromStatuspage(inc, base, offsetMin) {
+    const ups = (inc.incident_updates || []).slice().sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+    const lines = ups.map((u) => '[' + fmtLocal(Date.parse(u.created_at), offsetMin) + ' ' + (u.status || '') + '] ' + clip(u.body, 300));
+    const comps = (inc.components || []).map((c) => c.name).filter(Boolean).join('、');
+    const head = '影响级别:' + (inc.impact || '?') + ' 当前状态:' + (inc.status || '?') +
+      (inc.resolved_at ? ' 解决于:' + fmtLocal(Date.parse(inc.resolved_at), offsetMin) : ' 尚未解决') +
+      (comps ? ' 受影响组件:' + comps : '');
+    return {
+      src: 'status', type: 'official', title: clip(inc.name, 200),
+      url: String(inc.id ? base + '/incidents/' + inc.id : (inc.shortlink || base)),
+      text: clip(head + ' ' + lines.join(' '), 1200), date: inc.created_at || null,
+      resolved: inc.resolved_at || null, impact: inc.impact || '', via: '官方状态页',
+    };
+  }
+  function summarizeStatus(summary) {
+    if (!summary || typeof summary !== 'object') return '';
+    const overall = summary.status && summary.status.description ? summary.status.description : '';
+    const bad = (summary.components || []).filter((c) => c && c.status && c.status !== 'operational' && !c.group)
+      .map((c) => c.name + '（' + c.status + '）');
+    return (overall ? '总体：' + overall : '') + (bad.length ? '；异常组件：' + bad.slice(0, 8).join('、') : overall ? '；各组件正常' : '');
+  }
+
+  /* ---------------- 来源分类 ---------------- */
+  const COMMUNITY = ['reddit.com', 'x.com', 'news.ycombinator.com', 'github.com', 'v2ex.com', 'linux.do', 'zhihu.com',
+    'tieba.baidu.com', 'stackoverflow.com', 'stackexchange.com', 'superuser.com', 'serverfault.com', 'lobste.rs', 'bsky.app',
+    'discord.com', 'weibo.com', 'nodeseek.com', 'hostloc.com', 'threads.net', 'threads.com', 'mastodon.social', 'lemmy.world',
+    'douban.com', 'coolapk.com', 'nga.cn', 'steamcommunity.com', 'tildes.net', 'quora.com', 'facebook.com', 'youtube.com', 'bilibili.com', 't.me'];
+  /* 聚合站：自动转抄状态页或收集「我也挂了」点击数的站。按域名、路径、标题三种特征识别。 */
+  const AGG_HOST = /(status|down|outage|uptime|pulsetic|claudenetwork|visualsentinel|notopening)/i;
+  const AGG_PATH = /\/(provider-)?status(\/|$)|\/outages?(\/|$)|\/is-[a-z0-9-]*-down/i;
+  const AGG_TITLE = /^is .{1,40} down\b|(outage|status) (tracker|history|map|checker|monitor)|status\s*(&|and)\s*outage|down right now|live (service )?status|current status|is it down/i;
+  function pathOf(raw) { try { return new URL(String(raw).trim()).pathname; } catch (e) { return ''; } }
+
+  function hostIn(host, list) { return list.some((h) => host === h || host.endsWith('.' + h)); }
+  function classifySource(it, ctx) {
+    if (it.src === 'status') return 'official';
+    const host = hostOf(it.url);
+    if (ctx && ctx.officialHosts && hostIn(host, ctx.officialHosts)) return 'official';
+    // 注册表里没有的产品：status.<厂商域名> 这种写法按官方状态页处理
+    if (ctx && /^status\./.test(host) && (ctx.names || []).some((n) => host.indexOf(n.toLowerCase().replace(/[^a-z0-9]/g, '')) > 6)) return 'official';
+    if (hostIn(host, COMMUNITY) || /^(community|forum|forums|discuss|discourse|bbs|ask|answers)\./.test(host)) return 'community';
+    if (AGG_HOST.test(host) || AGG_PATH.test(pathOf(it.url)) || AGG_TITLE.test(it.title || '')) return 'aggregator';
+    return 'news';
+  }
+
+  /* ---------------- 过滤、去重、打分 ---------------- */
+  function makeCtx(p, windowHours, now) {
+    const names = uniq([p.product].concat(p.aliases || []).map((n) => String(n || '').trim()).filter((n) => n.length >= 2));
+    return {
+      names, nameRes: names.map(nameRe),
+      symptoms: (p.symptoms_en || []).concat(p.symptoms_zh || [])
+        .map((s) => ({ set: tokens(s), weak: tokens(String(s).replace(WEAK, ' ')).size === 0 })).filter((s) => s.set.size),
+      errorRes: (p.errors || []).map((e) => /^[\x00-\x7f]+$/.test(e) ? new RegExp('(^|[^a-z0-9_])' + escRe(e) + '([^a-z0-9_]|$)', 'i') : new RegExp(escRe(e), 'i')),
+      officialHosts: p.officialHosts || [], windowMs: windowHours * HOUR, now, cap: 40, hostCap: 12,
+    };
+  }
+
+  const REASON = {
+    dup: '同一链接', old: '超出时间范围', noproduct: '没提到这个产品', nosymptom: '没提到故障或症状',
+    reponoise: '仓库里的普通 issue，没对上你说的症状', hostcap: '同一网站已留够 12 条',
+    aggregator: '聚合站（只留 2 条当热度信号）', upcap: '上游事件（只留 3 条）', cap: '相关度靠后，超出上限',
+    irrelevant: '语义筛选：和你说的不是一回事', restate: '语义筛选：转述同一来源',
+  };
+  const TYPE_W = { official: 2.5, community: 1, news: 0.5, aggregator: -1, upstream: 0 };
+
+  function applyFilters(raw, ctx) {
+    const excluded = [];
+    const stats = { total: raw.length };
+    const drop = (it, reason) => { it.reason = reason; excluded.push(it); };
+
+    // 1 同一链接合并
+    const byCanon = new Map();
+    for (const r of raw) {
+      if (!r || !r.url || !r.title) continue;
+      const it = Object.assign({}, r);
+      it.canon = canonicalUrl(it.url);
+      it.host = hostOf(it.url);
+      const prev = byCanon.get(it.canon);
+      if (!prev) { it.vias = it.via ? [it.via] : []; byCanon.set(it.canon, it); continue; }
+      const better = (!prev.date && it.date) || (!!prev.date === !!it.date && (it.text || '').length > (prev.text || '').length);
+      const win = better ? it : prev, lose = better ? prev : it;
+      win.vias = uniq((prev.vias || []).concat(it.via ? [it.via] : []));
+      win.comments = Math.max(prev.comments || 0, it.comments || 0);
+      win.points = Math.max(prev.points || 0, it.points || 0);
+      win.rerank = Math.max(prev.rerank == null ? -1 : prev.rerank, it.rerank == null ? -1 : it.rerank);
+      if (win.rerank < 0) win.rerank = null;
+      win.upstream = prev.upstream && it.upstream;
+      win.fromRepo = prev.fromRepo || it.fromRepo;
+      byCanon.set(it.canon, win);
+      drop(lose, 'dup');
+    }
+
+    // 2 时间、相关性、打分
+    const pass = [];
+    for (const it of byCanon.values()) {
+      const title = it.title || '', body = title + ' ' + (it.text || '');
+      const exempt = it.src === 'status' || it.fromRepo;
+      const inTitle = ctx.nameRes.some((re) => re.test(title));
+      const inBody = inTitle || ctx.nameRes.some((re) => re.test(body));
+      const productHit = exempt || inBody;
+      it.type = it.upstream && !inBody ? 'upstream' : (it.type && it.type !== 'upstream' ? it.type : classifySource(it, ctx));
+
+      let ts = it.date ? Date.parse(it.date) : NaN;
+      if (!isNaN(ts) && ts > ctx.now + DAY) ts = NaN;
+      it.ts = isNaN(ts) ? null : ts;
+      it.undated = it.ts == null;
+      const limit = it.type === 'official' ? Math.max(ctx.windowMs, 7 * DAY) : ctx.windowMs;
+      if (it.ts != null && ctx.now - it.ts > limit) { drop(it, 'old'); continue; }
+
+      const generic = GENERIC.test(body);
+      if (it.type === 'upstream') {
+        if (!(INFRA.test(body) && generic)) { drop(it, 'noproduct'); continue; }
+      } else if (!productHit) { drop(it, 'noproduct'); continue; }
+
+      it.tt = tokens(title);
+      it.bt = tokens(body);
+      let specific = 0, weak = 0;
+      for (const sym of ctx.symptoms) {
+        let hit = 0;
+        for (const t of sym.set) if (it.bt.has(t)) hit++;
+        if (hit / sym.set.size >= 0.6) { if (sym.weak) weak++; else specific++; }
+      }
+      it.errorHit = ctx.errorRes.some((re) => re.test(body));
+      const changeWord = it.type === 'official' && CHANGE.test(body);
+      if (it.src !== 'status' && it.type !== 'upstream' && !specific && !weak && !generic && !it.errorHit && !changeWord) { drop(it, 'nosymptom'); continue; }
+      // 产品自己的 issue 区里每条都带 bug、error 这类词，必须对上具体症状、报错原文，或者跟帖的人很多
+      const engaged = (it.comments || 0) + (it.points || 0);
+      if (it.fromRepo && !specific && !it.errorHit && engaged < 8) { drop(it, 'reponoise'); continue; }
+
+      let s = TYPE_W[it.type] || 0;
+      if (it.type !== 'upstream') s += it.fromRepo ? 1.5 : exempt ? 2 : inTitle ? 3 : 1.5;
+      s += Math.min(3, specific * 1.5 + weak * 0.5 + (generic ? 0.5 : 0));
+      if (it.errorHit) s += 3;
+      s += it.ts != null ? 2 * Math.exp(-(ctx.now - it.ts) / ctx.windowMs) : -0.5;
+      s += Math.min(1.5, Math.log10(1 + engaged) * 0.75);
+      if (it.rerank != null) s += 0.4 * it.rerank;
+      it.score = Math.round(s * 1000) / 1000;
+      pass.push(it);
+    }
+    pass.sort((a, b) => b.score - a.score || (b.ts || 0) - (a.ts || 0));
+
+    // 3 聚合站、上游事件限量
+    const main = [], agg = [], up = [];
+    for (const it of pass) {
+      if (it.type === 'aggregator') { if (agg.length < 2) agg.push(it); else drop(it, 'aggregator'); }
+      else if (it.type === 'upstream') { if (up.length < 3) up.push(it); else drop(it, 'upcap'); }
+      else main.push(it);
+    }
+
+    // 4 相似标题归组（官方条目不参与：不同日期的同名事故必须分开）
+    const reps = [], perHost = new Map();
+    for (const it of main) {
+      it.similar = [];
+      let host = null;
+      if (it.type !== 'official') {
+        for (const rep of reps) {
+          if (rep.type !== it.type) continue;
+          const same = jaccard(it.tt, rep.tt) >= 0.7 ||
+            (it.bt.size >= 8 && rep.bt.size >= 8 && jaccard(it.bt, rep.bt) >= 0.75);
+          if (same) { host = rep; break; }
+        }
+      }
+      if (host) { host.similar.push({ title: it.title, url: it.url, host: it.host, date: it.date || null }); continue; }
+      const used = perHost.get(it.host) || 0;
+      if (it.type !== 'official' && used >= ctx.hostCap) { drop(it, 'hostcap'); continue; }
+      perHost.set(it.host, used + 1);
+      reps.push(it);
+    }
+    agg.concat(up).forEach((it) => { it.similar = []; });
+
+    // 5 截断并编号
+    const room = Math.max(0, ctx.cap - agg.length - up.length);
+    reps.slice(room).forEach((it) => drop(it, 'cap'));
+    const kept = reps.slice(0, room).concat(agg, up).sort((a, b) => b.score - a.score || (b.ts || 0) - (a.ts || 0));
+    kept.forEach((it, i) => { it.id = i + 1; });
+    stats.kept = kept.length;
+    stats.similar = kept.reduce((n, it) => n + it.similar.length, 0);
+    stats.excluded = excluded.length;
+    stats.byReason = excluded.reduce((m, it) => { m[it.reason] = (m[it.reason] || 0) + 1; return m; }, {});
+    return { kept, excluded, stats };
+  }
+
+  /* ---------------- 模型输出处理 ---------------- */
+  function extractJson(text) {
+    const s = String(text || '');
+    for (let start = s.indexOf('{'); start >= 0; start = s.indexOf('{', start + 1)) {
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < s.length; i++) {
+        const ch = s[i];
+        if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            try { const v = JSON.parse(s.slice(start, i + 1)); if (v && typeof v === 'object') return v; } catch (e) { /* 换下一个起点 */ }
+            break;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  const CONF = ['low', 'medium', 'high'];
+  const VERDICTS = ['widespread', 'official_change', 'likely_local', 'mixed', 'insufficient'];
+
+  function postProcess(report, items) {
+    report = report && typeof report === 'object' ? report : {};
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const lab = new Map();
+    for (const l of Array.isArray(report.labels) ? report.labels : []) {
+      const id = Number(l && l.id);
+      if (!byId.has(id)) continue;
+      const dup = l.dup_of == null || l.dup_of === '' ? null : Number(l.dup_of);
+      lab.set(id, { rel: String(l.rel || ''), dup_of: byId.has(dup) && dup !== id ? dup : null });
+    }
+    const rootOf = (id) => {
+      const seen = new Set([id]);
+      let cur = id;
+      for (;;) {
+        const l = lab.get(cur);
+        if (!l || l.dup_of == null || seen.has(l.dup_of) || byId.get(cur).type === 'official') return cur;
+        cur = l.dup_of; seen.add(cur);
+      }
+    };
+    const irrelevant = new Set();
+    lab.forEach((l, id) => { if (l.rel === 'irrelevant') irrelevant.add(id); });
+    const cleanIds = (arr) => uniq((Array.isArray(arr) ? arr : []).map(Number)
+      .filter((id) => byId.has(id) && !irrelevant.has(id)).map(rootOf).filter((id) => !irrelevant.has(id)));
+    const weigh = (ids) => {
+      let official = false, usable = 0;
+      const keys = new Set();
+      let extra = 0;
+      for (const id of ids) {
+        const it = byId.get(id);
+        if (it.type === 'aggregator') continue;
+        usable++;
+        if (it.type === 'official') official = true;
+        if (!keys.has(it.canon)) {
+          keys.add(it.canon);
+          if (it.type === 'community') extra += (it.similar || []).filter((s) => !s.restate).length;
+        }
+      }
+      return { official, usable, n: keys.size + extra };
+    };
+    const conf = (v) => (CONF.indexOf(v) >= 0 ? v : 'low');
+    const txt = (v) => (v == null ? '' : String(v).trim());
+
+    const causes = (Array.isArray(report.causes) ? report.causes : []).slice(0, 5).map((c) => {
+      c = c || {};
+      const ev = cleanIds(c.evidence);
+      const w = weigh(ev);
+      let cf = conf(c.confidence), note = '';
+      if (!ev.length) { cf = 'low'; note = '无依据'; }
+      else if (!w.usable) { cf = 'low'; note = '只有聚合站，不能当依据'; }
+      else if (!w.official) {
+        if (w.n < 2) { cf = 'low'; note = '单一来源'; }
+        else if (w.n < 3 && cf === 'high') cf = 'medium';
+      }
+      return { title: txt(c.title), type: txt(c.type) || 'unknown', confidence: cf, note, why: txt(c.why), evidence: ev, against: cleanIds(c.against), sources: w.n, official: w.official };
+    }).filter((c) => c.title);
+
+    let verdict = VERDICTS.indexOf(report.verdict) >= 0 ? report.verdict : 'insufficient';
+    const backed = causes.some((c) => c.evidence.length && c.note !== '只有聚合站，不能当依据');
+    if (!backed && verdict !== 'likely_local') verdict = 'insufficient';
+    let overall = conf(report.confidence);
+    const top = causes.length ? causes[0].confidence : 'low';
+    if (CONF.indexOf(overall) > CONF.indexOf(top)) overall = top;
+
+    const sec = (o) => { o = o && typeof o === 'object' ? o : {}; return o; };
+    const others = sec(report.others), official = sec(report.official);
+    const out = {
+      verdict, headline: txt(report.headline), confidence: overall, causes,
+      timeline: (Array.isArray(report.timeline) ? report.timeline : []).slice(0, 12)
+        .map((t) => ({ time: txt(t && t.time), event: txt(t && t.event), evidence: cleanIds(t && t.evidence) })).filter((t) => t.event),
+      others: { summary: txt(others.summary), scale: txt(others.scale), affected: txt(others.affected), evidence: cleanIds(others.evidence) },
+      official: { statement: txt(official.statement), matches_reports: txt(official.matches_reports), evidence: cleanIds(official.evidence) },
+      actions: (Array.isArray(report.actions) ? report.actions : []).slice(0, 6)
+        .map((a) => (typeof a === 'string' ? { do: a, why: '' } : { do: txt(a && a.do), why: txt(a && a.why) })).filter((a) => a.do),
+      unknowns: (Array.isArray(report.unknowns) ? report.unknowns : []).map(txt).filter(Boolean).slice(0, 6),
+    };
+
+    const moved = [], kept = [];
+    for (const it of items) {
+      if (irrelevant.has(it.id)) { it.reason = 'irrelevant'; moved.push(it); continue; }
+      const r = rootOf(it.id);
+      if (r !== it.id && !irrelevant.has(r)) {
+        it.reason = 'restate';
+        byId.get(r).similar.push({ title: it.title, url: it.url, host: it.host, date: it.date || null, restate: true });
+        moved.push(it); continue;
+      }
+      const l = lab.get(it.id);
+      it.rel = l ? l.rel : '';
+      kept.push(it);
+    }
+    return { report: out, kept, moved };
+  }
+
+  /* ---------------- 提示词 ---------------- */
+  function parseMessages(desc) {
+    const sys = [
+      '你是故障调查工具里的"拆解"环节。用户会描述某个产品或服务突然出现的问题。请只输出 json，不要输出别的内容。',
+      '字段：',
+      '{',
+      '  "product": "产品的英文常用名，如 Claude",',
+      '  "vendor": "厂商英文名，如 Anthropic；不确定填空字符串",',
+      '  "aliases": ["其他叫法、域名、子产品，最多 5 个"],',
+      '  "symptoms_en": ["英文症状短语 2-4 个，每个 2-4 个词，用户最强调的排最前，用海外用户发帖时会用的说法"],',
+      '  "symptoms_zh": ["中文症状短语 1-3 个"],',
+      '  "errors": ["用户原文里出现的报错原文或错误码，原样照抄；没有就给空数组"],',
+      '  "platform": "涉及的平台或版本，如 iOS app、API、网页；不确定填空",',
+      '  "status_page": "官方状态页网址；不确定填空，不要编",',
+      '  "github_repos": ["最相关的官方 GitHub 仓库 owner/name，最多 2 个；不确定给空数组，不要编"],',
+      '  "extra_queries": ["最多 3 条值得补充的英文搜索词，每条不超过 80 个字符"]',
+      '}',
+      '规则：不要猜原因；不要把症状写得比用户说的更具体。',
+      '示例输入：Cursor 今天更新完之后 tab 补全不出来了，一直转圈',
+      '示例 json 输出：{"product":"Cursor","vendor":"Anysphere","aliases":["cursor.com","Cursor IDE"],"symptoms_en":["tab completion not working","autocomplete stuck loading","broken after update"],"symptoms_zh":["补全不出来","一直转圈"],"errors":[],"platform":"桌面端","status_page":"https://status.cursor.com","github_repos":[],"extra_queries":["Cursor tab autocomplete broken latest version"]}',
+    ].join('\n');
+    return [{ role: 'system', content: sys }, { role: 'user', content: String(desc || '').slice(0, 1500) }];
+  }
+
+  const TYPE_ZH = { official: '官方', community: '社区', news: '新闻', aggregator: '聚合站', upstream: '上游事件' };
+
+  function analysisMessages(desc, p, items, statusSummary, now, offsetMin, windowHours) {
+    const sys = [
+      '你是故障调查分析员。用户描述了一个突然出现的问题。下面是一批已经做过机械去重的证据条目，每条有编号、来源类型、时间、标题、摘要。',
+      '请只根据这些条目判断：出了什么事、原因是什么、其他人的情况如何、用户现在能做什么。只输出 json。',
+      '',
+      '硬性规则：',
+      '1. 只能使用给出的条目。每个结论都要在 evidence 里写出依据的条目编号。没有条目支持的内容不能写成结论，放进 unknowns。',
+      '2. 先逐条筛选，写进 labels：rel 取 same（和用户说的是同一件事）、related（同一产品但不是同一个问题）、irrelevant（无关）。如果某条只是在转述另一条（同一条官方通告、同一个帖子、同一篇通稿），在 dup_of 填被转述的那条编号，否则填 null。',
+      '3. 把握程度 confidence：high = 官方已承认且症状和时间都对得上，或至少 3 个互相独立的来源一致；medium = 至少 2 个独立来源一致；low = 只有 1 个来源，或只是推测。转述同一来源的只算 1 个。',
+      '4. 官方说法也只是一种待核实的说法。要对比官方承认的时间和范围与用户报告是否一致，例如用户先报告了多久官方才承认、官方说的范围是否比用户报告的小。不一致就写出来。',
+      '5. 原因类型 type 只能取：provider_outage（服务方故障）、deliberate_change（官方主动变更，如政策、限额、下线、改版、封禁）、upstream（上游依赖故障）、account（账号个别问题）、local（用户本地环境，如网络、代理、版本、缓存）、unknown。',
+      '6. 如果证据和用户的症状或时间对不上，verdict 用 insufficient，并在 actions 里给出自查步骤。不要为了给出结论硬凑。时间范围之外的旧事故不能当成这次的原因。',
+      '7. 类型为"聚合站"的条目只能说明有很多人在查或在报，不能作为原因的依据。类型为"上游事件"的条目只有在时间吻合、且有条目把它和这个产品联系起来时才能当原因。',
+      '8. 条目的"时间"已经换算成用户时区。timeline 的 time 用 MM-DD HH:mm 格式，直接取条目时间，不要自己换算。',
+      '9. 用简体中文，句子短，不要客套话。actions 要具体可执行。',
+      '',
+      '输出 json 结构：',
+      '{',
+      '  "labels": [{"id": 1, "rel": "same", "dup_of": null}],',
+      '  "verdict": "widespread | official_change | likely_local | mixed | insufficient",',
+      '  "headline": "一句话结论",',
+      '  "confidence": "high | medium | low",',
+      '  "causes": [{"title": "原因假设", "type": "provider_outage", "confidence": "high", "why": "为什么这么判断", "evidence": [1, 2], "against": []}],',
+      '  "timeline": [{"time": "11-16 15:49", "event": "发生了什么", "evidence": [1]}],',
+      '  "others": {"summary": "其他人的情况", "scale": "大概多少人或多大范围", "affected": "哪些地区、平台、版本、套餐受影响", "evidence": [2, 3]},',
+      '  "official": {"statement": "官方怎么说；没有官方说法就写没有", "matches_reports": "和用户报告是否一致、差在哪", "evidence": [1]},',
+      '  "actions": [{"do": "现在能做什么", "why": "依据"}],',
+      '  "unknowns": ["还不确定的事"]',
+      '}',
+      'verdict 含义：widespread = 普遍问题，不止用户一个；official_change = 官方主动变更；likely_local = 没有其他人报告，多半是用户这边的问题；mixed = 只有部分人受影响；insufficient = 证据不足。',
+    ].join('\n');
+
+    const lines = [];
+    lines.push('用户描述：' + String(desc || '').slice(0, 1500));
+    lines.push('当前时间：' + fmtLocal(now, offsetMin) + '（' + tzLabel(offsetMin) + '）');
+    lines.push('时间范围：最近 ' + (windowHours >= 48 && windowHours % 24 === 0 ? windowHours / 24 + ' 天' : windowHours + ' 小时') + '（官方条目放宽到 7 天）');
+    lines.push('产品：' + p.product + (p.platform ? '；平台：' + p.platform : ''));
+    if (p.errors && p.errors.length) lines.push('用户给出的报错原文：' + p.errors.join(' / '));
+    if (statusSummary) lines.push('官方状态页当前显示：' + statusSummary);
+    lines.push('');
+    lines.push('证据条目（共 ' + items.length + ' 条）：');
+    for (const it of items) {
+      const eng = [];
+      if (it.comments) eng.push('评论' + it.comments);
+      if (it.points) eng.push('赞' + it.points);
+      lines.push('[' + it.id + '] 类型=' + (TYPE_ZH[it.type] || it.type) + ' 来源=' + (it.host || '') +
+        ' 时间=' + (it.ts != null ? fmtLocal(it.ts, offsetMin) : '未知') + (eng.length ? ' 互动=' + eng.join('、') : ''));
+      lines.push('标题：' + it.title);
+      if (it.text) lines.push('摘要：' + clip(it.text, it.src === 'status' ? 1200 : 500));
+      if (it.similar && it.similar.length) {
+        lines.push('另有 ' + it.similar.length + ' 条相似（' + uniq(it.similar.map((s) => s.host)).slice(0, 4).join('、') + '）');
+      }
+    }
+    if (!items.length) lines.push('（没有找到符合条件的条目）');
+    return [{ role: 'system', content: sys }, { role: 'user', content: lines.join('\n') }];
+  }
+
+  return {
+    HOUR, DAY, REASON, TYPE_ZH, REGISTRY,
+    uniq, clip, canonicalUrl, hostOf, tokens, jaccard, registryFor, extractErrors,
+    normalizeParsed, heuristicParse, buildQueries, buildDeepLinks,
+    fromDeepseek, fromGithub, fromHN, fromStatuspage, summarizeStatus, fmtLocal, tzLabel,
+    classifySource, makeCtx, applyFilters, extractJson, postProcess, parseMessages, analysisMessages,
+  };
+});
+
+</script>
+<script>
+/* 故障溯源 · 界面与网络 */
+(function () {
+  'use strict';
+  const C = window.Core;
+  const $ = (id) => document.getElementById(id);
+  const LS = { cfg: 'suyuan.cfg', hist: 'suyuan.hist' };
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
+  };
+  const DEFAULTS = { key: '', base: 'https://api.deepseek.com', model: 'deepseek-flash', think: false, win: 48 };
+  let cfg = Object.assign({}, DEFAULTS, store.get(LS.cfg, {}));
+  let usage = { search: 0, tokens: 0 };
+  let running = false;
+
+  /* ---------- DOM 小工具（外部文本一律走 textContent，不拼 HTML） ---------- */
+  function safeUrl(u) {
+    try { const x = new URL(String(u)); return x.protocol === 'https:' || x.protocol === 'http:' ? x.href : '#'; } catch (e) { return '#'; }
+  }
+  function h(tag, attrs) {
+    const el = document.createElement(tag);
+    if (attrs) {
+      for (const k in attrs) {
+        const v = attrs[k];
+        if (v == null || v === false) continue;
+        if (k === 'class') el.className = v;
+        else if (k === 'href') el.setAttribute('href', safeUrl(v));
+        else if (k.slice(0, 2) === 'on') el.addEventListener(k.slice(2), v);
+        else el.setAttribute(k, v === true ? '' : v);
+      }
+    }
+    for (let i = 2; i < arguments.length; i++) {
+      const kids = Array.isArray(arguments[i]) ? arguments[i] : [arguments[i]];
+      for (const kid of kids) {
+        if (kid == null || kid === false || kid === '') continue;
+        el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+      }
+    }
+    return el;
+  }
+  const link = (url, text, cls) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: cls }, text);
+  const tzMin = () => -new Date().getTimezoneOffset();
+  function ago(ts, now) {
+    const m = Math.round((now - ts) / 60000);
+    if (m < 1) return '刚刚';
+    if (m < 60) return m + ' 分钟前';
+    if (m < 60 * 36) return Math.round(m / 60) + ' 小时前';
+    return Math.round(m / 1440) + ' 天前';
+  }
+
+  /* ---------- 网络 ---------- */
+  const HTTP_MSG = { 400: '请求格式不对', 401: 'key 无效', 402: '余额不足', 403: '被拒绝', 404: '地址不存在', 422: '请求不被接受', 429: '请求太频繁', 500: '对方服务器出错', 502: '对方网关出错', 503: '对方服务不可用', 504: '对方超时' };
+  async function req(url, opt, ms) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), ms || 15000);
+    try {
+      const r = await fetch(url, Object.assign({ signal: ctl.signal }, opt || {}));
+      const text = await r.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+      if (!r.ok) {
+        const raw = data && (data.error ? (data.error.message || data.error) : data.message);
+        const limited = /rate limit/i.test(String(raw || ''));
+        const err = new Error(limited ? '请求太频繁（未登录每分钟只能搜 10 次），过一分钟再试' : (HTTP_MSG[r.status] || 'HTTP ' + r.status) + (raw ? '：' + String(raw).slice(0, 100) : ''));
+        err.status = r.status;
+        throw err;
+      }
+      if (data == null) throw new Error('返回的不是 JSON');
+      return data;
+    } catch (e) {
+      if (e && e.name === 'AbortError') throw new Error('超时');
+      if (e instanceof TypeError) throw new Error('连不上（网络不通，或被跨域策略拦截）');
+      throw e;
+    } finally { clearTimeout(timer); }
+  }
+  const baseUrl = (b) => String(b || DEFAULTS.base).trim().replace(/\/+$/, '').replace(/\/v1$/, '');
+  const auth = (key) => ({ Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' });
+
+  async function chatOnce(messages, maxTokens, think) {
+    const body = { model: cfg.model, messages, response_format: { type: 'json_object' }, max_tokens: maxTokens, thinking: { type: think ? 'enabled' : 'disabled' } };
+    if (think) body.reasoning_effort = 'high';
+    const data = await req(baseUrl(cfg.base) + '/chat/completions', { method: 'POST', headers: auth(cfg.key), body: JSON.stringify(body) }, think ? 240000 : 120000);
+    usage.tokens += (data.usage && data.usage.total_tokens) || 0;
+    const msg = data.choices && data.choices[0] && data.choices[0].message;
+    return C.extractJson(msg && msg.content);
+  }
+  async function chatJson(messages, maxTokens, think) {
+    let v = await chatOnce(messages, maxTokens, think);
+    // 官方文档提醒 JSON 模式偶尔会返回一串空白，这里关掉思考再试一次
+    if (!v) v = await chatOnce(messages, maxTokens, false);
+    if (!v) throw new Error('模型没有返回可解析的 JSON');
+    return v;
+  }
+  async function dsSearch(q, desc) {
+    const body = { query: q.q, count: 20 };
+    if (desc) body.ori_question = desc.slice(0, 128);
+    const data = await req(baseUrl(cfg.base) + '/v1/tools/search', { method: 'POST', headers: auth(cfg.key), body: JSON.stringify(body) }, 25000);
+    const rs = Array.isArray(data.results) ? data.results : [];
+    if (rs.length) usage.search++;
+    return rs.map((r) => C.fromDeepseek(r, q));
+  }
+  async function ghSearch(q, sort) {
+    const url = 'https://api.github.com/search/issues?q=' + encodeURIComponent(q) + '&sort=' + sort + '&order=desc&per_page=30';
+    const data = await req(url, null, 15000);
+    return Array.isArray(data.items) ? data.items : [];
+  }
+  async function collectGithub(p, hours, now) {
+    const since = new Date(now - hours * C.HOUR).toISOString().slice(0, 19) + 'Z';
+    const kw = (p.symptoms_en[0] || '').split(/\s+/).filter((w) => w.length > 2).slice(0, 2).join(' ');
+    const jobs = [];
+    if (p.github_repos.length) {
+      for (const r of p.github_repos) {
+        const q = 'is:issue repo:' + r + ' created:>=' + since;
+        jobs.push(ghSearch(q, 'comments').then((a) => a.map((i) => C.fromGithub(i, true))));
+        jobs.push(ghSearch(q, 'created').then((a) => a.map((i) => C.fromGithub(i, true))));
+      }
+      if (p.errors[0]) jobs.push(ghSearch('is:issue repo:' + p.github_repos[0] + ' "' + p.errors[0].replace(/"/g, '') + '" created:>=' + since, 'created').then((a) => a.map((i) => C.fromGithub(i, true))));
+    } else {
+      jobs.push(ghSearch('is:issue ' + p.product + ' ' + kw + ' created:>=' + since, 'created').then((a) => a.map((i) => C.fromGithub(i, false))));
+      jobs.push(ghSearch('is:issue ' + p.product + ' in:title created:>=' + since, 'comments').then((a) => a.map((i) => C.fromGithub(i, false))));
+    }
+    return settle(jobs);
+  }
+  async function collectHN(p, hours, now) {
+    const ts = Math.floor((now - hours * C.HOUR) / 1000);
+    const kw = (p.symptoms_en[0] || '').split(/\s+/).filter((w) => w.length > 2)[0] || '';
+    const u = (q, tag) => 'https://hn.algolia.com/api/v1/search_by_date?query=' + encodeURIComponent(q) + '&tags=' + tag + '&numericFilters=' + encodeURIComponent('created_at_i>' + ts) + '&hitsPerPage=30';
+    return settle([
+      req(u(p.product, 'story')).then((d) => (d.hits || []).map(C.fromHN)),
+      req(u((p.product + ' ' + kw).trim(), 'comment')).then((d) => (d.hits || []).map(C.fromHN)),
+    ]);
+  }
+  async function collectStatus(p) {
+    const b = p.status_page.replace(/\/+$/, '');
+    const rs = await Promise.allSettled([req(b + '/api/v2/incidents.json'), req(b + '/api/v2/summary.json')]);
+    if (rs[0].status === 'rejected' && rs[1].status === 'rejected') throw rs[0].reason;
+    const incs = rs[0].status === 'fulfilled' && Array.isArray(rs[0].value.incidents) ? rs[0].value.incidents : [];
+    const summary = rs[1].status === 'fulfilled' ? rs[1].value : null;
+    return {
+      items: incs.slice(0, 25).map((i) => C.fromStatuspage(i, b, tzMin())),
+      summary: C.summarizeStatus(summary),
+      active: incs.some((i) => !i.resolved_at),
+    };
+  }
+  /* 一组请求里只要有一个成功就算成功；全失败才抛错 */
+  async function settle(jobs) {
+    const rs = await Promise.allSettled(jobs);
+    const ok = rs.filter((r) => r.status === 'fulfilled');
+    if (!ok.length && rs.length) throw rs[0].reason;
+    const items = [];
+    ok.forEach((r) => items.push.apply(items, r.value));
+    return { items, failed: rs.length - ok.length, total: rs.length, firstError: (rs.find((r) => r.status === 'rejected') || {}).reason };
+  }
+
+  /* ---------- 进度 ---------- */
+  const ICON = { wait: '·', run: '◌', ok: '✓', fail: '✕', warn: '!', skip: '–' };
+  function progress() {
+    const ul = h('ul', { class: 'plist' });
+    const box = $('progress');
+    box.replaceChildren(h('h2', null, '进度'), ul);
+    box.hidden = false;
+    return function add(label) {
+      const ic = h('span', { class: 'ic' }, ICON.wait);
+      const note = h('span', { class: 'note' });
+      const li = h('li', { class: 'st-wait' }, ic, h('div', null, label, ' ', note));
+      ul.append(li);
+      return function set(state, text) { li.className = 'st-' + state; ic.textContent = ICON[state]; note.textContent = text || ''; };
+    };
+  }
+
+  /* ---------- 主流程 ---------- */
+  const SELF_CHECK = [
+    { do: '换一个网络，或关掉、更换代理节点再试', why: '很多「突然用不了」是出口 IP 被限制，换线路就能分辨' },
+    { do: '换设备或浏览器，或用无痕窗口', why: '排除缓存、插件和客户端版本的问题' },
+    { do: '退出重新登录，看注册邮箱和站内通知', why: '排除账号被限制、欠费、额度用完' },
+    { do: '用下面的直达链接看各平台最新帖子', why: 'Reddit 和 X 只能跳转过去看，页面抓不到' },
+    { do: '过 15 到 30 分钟再查一次，或把时间范围调大', why: '刚发生的故障通常要过一会儿才有人发帖' },
+  ];
+  function emptyReport(statusFetched, statusActive) {
+    const calm = statusFetched && !statusActive;
+    return {
+      verdict: calm ? 'likely_local' : 'insufficient',
+      headline: calm
+        ? '没找到其他人在报同样的问题，官方状态页也没有未解决的事故。多半是你这边的问题，或者故障刚开始还没人发帖。'
+        : '时间范围内没找到相关报告，暂时下不了结论。',
+      confidence: 'low', causes: [], timeline: [],
+      others: { summary: '没有找到其他人的报告。', scale: '', affected: '', evidence: [] },
+      official: { statement: calm ? '状态页没有未解决的事故。' : '', matches_reports: '', evidence: [] },
+      actions: SELF_CHECK,
+      unknowns: ['没找到不等于没有：页面抓不到 Reddit、X 和群聊里的内容。'],
+    };
+  }
+
+  async function run() {
+    if (running) return;
+    const desc = $('desc').value.trim();
+    const manual = { product: $('mProduct').value.trim(), keywords: $('mKw').value.trim(), status: $('mStatus').value.trim() };
+    if (!desc && !manual.product) { $('desc').focus(); return; }
+    const hours = +$('win').value || 48;
+    cfg.win = hours; store.set(LS.cfg, cfg);
+    const now = Date.now();
+    const notices = [];
+    usage = { search: 0, tokens: 0 };
+    running = true; $('go').disabled = true; $('go').textContent = '正在查…';
+    $('result').hidden = true;
+    const add = progress();
+    const hasKey = !!cfg.key;
+    let llmOk = hasKey;
+
+    try {
+      // 1 拆解
+      const sParse = add('拆解描述');
+      sParse('run');
+      let parsed;
+      if (hasKey && desc) {
+        try {
+          parsed = C.normalizeParsed(await chatJson(C.parseMessages(desc), 900, false), desc, manual);
+          sParse('ok', parsed.product + ' · ' + parsed.symptoms_en.slice(0, 3).join(' / '));
+        } catch (e) {
+          llmOk = false;
+          parsed = C.heuristicParse(desc, manual);
+          sParse('warn', '模型调用失败（' + e.message + '），改用内置规则');
+          notices.push('DeepSeek 模型调用失败：' + e.message + '。本次没有归纳，只有抓取和过滤。可在「设置」里做连接自检。');
+        }
+      } else {
+        parsed = C.heuristicParse(desc, manual);
+        sParse('ok', (parsed.product || '?') + ' · ' + (parsed.symptoms_en.slice(0, 3).join(' / ') || '无症状词') + '（内置规则）');
+      }
+      if (!parsed.product) {
+        sParse('fail', '没认出是哪个产品，请在「手动指定」里填产品名');
+        $('adv').open = true; $('mProduct').focus();
+        return;
+      }
+
+      // 2 搜索
+      const raw = [];
+      const jobs = [];
+      let statusInfo = { fetched: false, active: false, summary: '' };
+
+      const sSearch = add('联网搜索');
+      if (hasKey) {
+        const queries = C.buildQueries(parsed, hours, now);
+        sSearch('run', queries.length + ' 条细分查询');
+        jobs.push(Promise.allSettled(queries.map((q) => dsSearch(q, desc))).then((rs) => {
+          const ok = rs.filter((r) => r.status === 'fulfilled');
+          let n = 0;
+          ok.forEach((r) => { n += r.value.length; raw.push.apply(raw, r.value); });
+          if (!ok.length) {
+            const msg = rs[0] && rs[0].reason ? rs[0].reason.message : '未知错误';
+            sSearch('fail', '全部失败：' + msg);
+            notices.push('DeepSeek 搜索接口调用失败：' + msg + '。本次结果只来自 GitHub、Hacker News 和官方状态页。');
+          } else sSearch(ok.length < rs.length ? 'warn' : 'ok', ok.length + '/' + rs.length + ' 条查询成功，共 ' + n + ' 条结果');
+        }));
+      } else sSearch('skip', '没填 key，跳过');
+
+      const source = (label, fn, okText) => {
+        const set = add(label);
+        set('run');
+        jobs.push(fn().then((r) => {
+          raw.push.apply(raw, r.items);
+          set(r.failed ? 'warn' : 'ok', okText(r) + (r.failed ? '（' + r.failed + '/' + r.total + ' 个请求失败：' + r.firstError.message + '）' : ''));
+        }).catch((e) => set('fail', e.message)));
+      };
+      source('GitHub issues', () => collectGithub(parsed, hours, now), (r) => r.items.length + ' 条');
+      source('Hacker News', () => collectHN(parsed, hours, now), (r) => r.items.length + ' 条');
+      const sStatus = add('官方状态页');
+      if (parsed.status_page) {
+        sStatus('run');
+        jobs.push(collectStatus(parsed).then((r) => {
+          raw.push.apply(raw, r.items);
+          statusInfo = { fetched: true, active: r.active, summary: r.summary };
+          sStatus('ok', (r.summary || '已读取') + ' · 近期事故 ' + r.items.length + ' 条');
+        }).catch((e) => sStatus('fail', e.message + '，请点下方「官方状态页」手动看')));
+      } else sStatus('skip', parsed.status_link ? '这个状态页不支持自动读取，下方有直达链接' : '不知道它的状态页地址，可在「手动指定」里填');
+      await Promise.all(jobs);
+
+      // 3 机械去重过滤
+      const sFilter = add('去重过滤');
+      const f = C.applyFilters(raw, C.makeCtx(parsed, hours, now));
+      sFilter('ok', '共 ' + f.stats.total + ' 条 → 留下 ' + f.kept.length + ' 条，相似归组 ' + f.stats.similar + ' 条，排除 ' + f.excluded.length + ' 条');
+
+      // 4 语义筛选与归纳
+      const sLlm = add('语义筛选与归纳');
+      let report = null, kept = f.kept, excluded = f.excluded;
+      if (!f.kept.length) {
+        report = emptyReport(statusInfo.fetched, statusInfo.active);
+        sLlm('skip', '没有可用条目，不调用模型');
+      } else if (llmOk) {
+        sLlm('run', cfg.think ? '深度思考中，可能要一两分钟' : '');
+        try {
+          const msgs = C.analysisMessages(desc, parsed, f.kept, statusInfo.summary, now, tzMin(), hours);
+          const pp = C.postProcess(await chatJson(msgs, cfg.think ? 20000 : 6000, cfg.think), f.kept);
+          report = pp.report; kept = pp.kept; excluded = excluded.concat(pp.moved);
+          sLlm('ok', pp.moved.length ? '又筛掉 ' + pp.moved.length + ' 条' : '');
+        } catch (e) {
+          sLlm('fail', e.message);
+          notices.push('归纳这一步失败：' + e.message + '。下面是过滤后的原始条目。');
+        }
+      } else sLlm('skip', hasKey ? '模型不可用' : '没填 key，跳过');
+      if (!hasKey) notices.push('没填 DeepSeek key：只做了抓取和机械过滤，没有结论。到「设置」里填 key 可以得到归纳结果。');
+
+      const state = {
+        t: now, desc, hours, product: parsed.product, report, kept, excluded,
+        stats: Object.assign({}, f.stats, { kept: kept.length, excluded: excluded.length }),
+        links: C.buildDeepLinks(parsed), usage: Object.assign({}, usage), notices,
+      };
+      render(state);
+      saveHistory(state);
+    } catch (e) {
+      const box = $('result');
+      box.replaceChildren(h('p', { class: 'notice err' }, '出错了：' + (e && e.message ? e.message : String(e))));
+      box.hidden = false;
+    } finally {
+      running = false; $('go').disabled = false; $('go').textContent = '开始查';
+    }
+  }
+
+  /* ---------- 渲染 ---------- */
+  const VERDICT = { widespread: ['不止你一个', 'red'], official_change: ['官方主动变更', 'blue'], likely_local: ['多半是你这边', 'teal'], mixed: ['部分人受影响', 'amber'], insufficient: ['证据不足', ''] };
+  const CONF = { high: ['把握：高', 'teal'], medium: ['把握：中', 'amber'], low: ['把握：低', ''] };
+  const CAUSE = { provider_outage: '服务方故障', deliberate_change: '官方主动变更', upstream: '上游依赖故障', account: '账号个别问题', local: '本地环境', unknown: '类型未知' };
+  const TYPE_CHIP = { official: 'blue', community: 'teal', news: '', aggregator: 'amber', upstream: 'amber' };
+
+  function refs(ids) {
+    if (!ids || !ids.length) return null;
+    return h('span', { class: 'refs' }, ids.map((id) => h('button', {
+      class: 'ref', type: 'button', 'aria-label': '查看证据 ' + id,
+      onclick: () => {
+        const el = $('ev-' + id);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+      },
+    }, String(id))));
+  }
+  const chip = (text, cls) => h('span', { class: 'chip ' + (cls || '') }, text);
+  const section = (title) => { const s = h('section', { class: 'card' }); if (title) s.append(h('h2', null, title)); return s; };
+
+  function renderReport(box, r) {
+    const v = VERDICT[r.verdict] || VERDICT.insufficient, cf = CONF[r.confidence] || CONF.low;
+    box.append(h('section', { class: 'card verdict v-' + r.verdict },
+      h('div', { class: 'chips' }, chip(v[0], v[1]), chip(cf[0], cf[1])),
+      h('p', { class: 'headline' }, r.headline || v[0])));
+
+    if (r.causes.length) {
+      const s = section('原因');
+      r.causes.forEach((c) => {
+        const cc = CONF[c.confidence] || CONF.low;
+        s.append(h('div', { class: 'cause' },
+          h('h3', null, c.title),
+          h('div', { class: 'chips' }, chip(CAUSE[c.type] || CAUSE.unknown), chip(cc[0], cc[1]), c.note ? chip(c.note, 'red') : null,
+            c.evidence.length ? chip(c.official ? '有官方依据' : c.sources + ' 个独立来源', c.official ? 'blue' : '') : null),
+          c.why ? h('p', null, c.why, refs(c.evidence)) : (c.evidence.length ? h('p', null, '依据', refs(c.evidence)) : null),
+          c.against.length ? h('p', { class: 'meta' }, '不支持这个判断的条目', refs(c.against)) : null));
+      });
+      box.append(s);
+    }
+    if (r.timeline.length) {
+      const s = section('时间线');
+      s.append(h('ul', { class: 'tl' }, r.timeline.map((t) => h('li', null, h('time', null, t.time || '—'), h('span', null, t.event, refs(t.evidence))))));
+      box.append(s);
+    }
+    const o = r.others;
+    if (o.summary || o.scale || o.affected) {
+      const s = section('其他人的情况');
+      const dl = h('dl', { class: 'kv' });
+      if (o.summary) dl.append(h('dt', null, '概况'), h('dd', null, o.summary, refs(o.evidence)));
+      if (o.scale) dl.append(h('dt', null, '规模'), h('dd', null, o.scale));
+      if (o.affected) dl.append(h('dt', null, '谁受影响'), h('dd', null, o.affected));
+      s.append(dl); box.append(s);
+    }
+    const of = r.official;
+    if (of.statement || of.matches_reports) {
+      const s = section('官方说法，和用户报告对照');
+      const dl = h('dl', { class: 'kv' });
+      if (of.statement) dl.append(h('dt', null, '官方怎么说'), h('dd', null, of.statement, refs(of.evidence)));
+      if (of.matches_reports) dl.append(h('dt', null, '对得上吗'), h('dd', null, of.matches_reports));
+      s.append(dl); box.append(s);
+    }
+    if (r.actions.length) {
+      const s = section('你现在能做什么');
+      s.append(h('ol', { class: 'acts' }, r.actions.map((a) => h('li', null, a.do, a.why ? h('small', null, a.why) : null))));
+      box.append(s);
+    }
+    if (r.unknowns.length) {
+      const s = section('还不确定的');
+      s.append(h('ul', { class: 'plain' }, r.unknowns.map((u) => h('li', null, u))));
+      box.append(s);
+    }
+  }
+
+  function renderEvidence(box, st) {
+    const s = section('证据（' + st.kept.length + ' 条）');
+    if (!st.kept.length) s.append(h('p', { class: 'hint' }, '没有符合条件的条目。'));
+    st.kept.forEach((it) => {
+      const meta = [it.host || ''];
+      if (it.ts != null) meta.push(C.fmtLocal(it.ts, tzMin()) + '（' + ago(it.ts, st.t) + '）'); else meta.push('时间未知');
+      if (it.comments) meta.push(it.comments + ' 评论');
+      if (it.points) meta.push(it.points + ' 赞');
+      const snip = it.text ? h('p', { class: 'snip' }, it.text) : null;
+      const el = h('article', { class: 'ev', id: 'ev-' + it.id },
+        h('div', { class: 'ev-head' }, h('span', { class: 'ev-id' }, '[' + it.id + ']'), chip(C.TYPE_ZH[it.type] || it.type, TYPE_CHIP[it.type]),
+          it.rel === 'related' ? chip('同产品，不同问题') : null),
+        link(it.url, it.title, 'ev-title'),
+        h('p', { class: 'meta' }, meta.filter(Boolean).join(' · ')),
+        snip);
+      if (snip && it.text.length > 90) {
+        const btn = h('button', { class: 'more', type: 'button', onclick: () => { const open = snip.classList.toggle('open'); btn.textContent = open ? '收起' : '展开'; } }, '展开');
+        el.append(btn);
+      }
+      if (it.similar && it.similar.length) {
+        const d = h('details', null, h('summary', null, '另有 ' + it.similar.length + ' 条相似'));
+        d.append(h('ul', { class: 'sim' }, it.similar.map((x) => h('li', null, x.restate ? '转述：' : '', link(x.url, x.title || x.url), ' · ' + (x.host || '')))));
+        el.append(d);
+      }
+      s.append(el);
+    });
+    box.append(s);
+  }
+
+  function renderExcluded(box, st) {
+    const by = st.stats.byReasonAll || {};
+    const n = st.stats.excluded || 0;
+    if (!n) return;
+    const s = h('section', { class: 'card excl' });
+    const parts = Object.keys(by).map((k) => (C.REASON[k] || k) + ' ' + by[k]);
+    const d = h('details', null, h('summary', null, '已排除 ' + n + ' 条 · 点开核对'));
+    d.append(h('p', { class: 'hint' }, parts.join('；')));
+    if (st.excluded && st.excluded.length) {
+      const list = st.excluded.filter((e) => e.reason !== 'dup').slice(0, 80);
+      d.append(h('ul', { class: 'excl-list' }, list.map((e) => h('li', null, link(e.url, e.title || e.url), h('span', { class: 'why' }, ' · ' + (C.REASON[e.reason] || e.reason) + (e.host ? ' · ' + e.host : ''))))));
+      if (by.dup) d.append(h('p', { class: 'hint' }, '「同一链接」的 ' + by.dup + ' 条是多条查询搜到了同一页，不逐条列出。'));
+    } else d.append(h('p', { class: 'hint' }, '历史记录里只保留了数量，没有保留被排除的条目。'));
+    s.append(d); box.append(s);
+  }
+
+  function render(st) {
+    const box = $('result');
+    box.replaceChildren();
+    if (!st.stats.byReasonAll) {
+      st.stats.byReasonAll = (st.excluded || []).reduce((m, e) => { m[e.reason] = (m[e.reason] || 0) + 1; return m; }, {});
+    }
+    (st.notices || []).forEach((n) => box.append(h('p', { class: 'notice' }, n)));
+    if (st.report) renderReport(box, st.report);
+    const ls = section('一键直达');
+    ls.append(h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'Reddit 和 X 不让页面抓取，点开看最新帖子。'));
+    ls.append(h('div', { class: 'links' }, (st.links || []).map((l) => link(l.url, l.name))));
+    box.append(ls);
+    renderEvidence(box, st);
+    renderExcluded(box, st);
+    box.append(h('p', { class: 'usage' }, '查询于 ' + C.fmtLocal(st.t, tzMin()) + ' · 时间范围 ' + (st.hours >= 48 ? st.hours / 24 + ' 天' : st.hours + ' 小时') +
+      (st.usage && (st.usage.search || st.usage.tokens) ? ' · 搜索 ' + st.usage.search + ' 次 · 模型 ' + st.usage.tokens + ' tokens' : '')));
+    box.hidden = false;
+  }
+
+  /* ---------- 历史 ---------- */
+  function slim(st) {
+    return {
+      t: st.t, desc: st.desc, hours: st.hours, product: st.product, report: st.report, links: st.links, usage: st.usage, notices: st.notices,
+      stats: st.stats,
+      kept: st.kept.map((it) => ({ id: it.id, type: it.type, src: it.src, title: it.title, url: it.url, host: it.host, ts: it.ts, text: C.clip(it.text, 300), similar: it.similar, comments: it.comments, points: it.points, rel: it.rel })),
+    };
+  }
+  function saveHistory(st) {
+    const list = store.get(LS.hist, []);
+    list.unshift(slim(st));
+    while (list.length > 8) list.pop();
+    while (!store.set(LS.hist, list) && list.length > 1) list.pop();
+    renderHistory();
+  }
+  function renderHistory() {
+    const list = store.get(LS.hist, []);
+    const box = $('history');
+    box.replaceChildren();
+    if (!list.length) return;
+    const s = section('查过的');
+    s.append(h('ul', { class: 'hist' }, list.map((st) => {
+      const v = st.report ? (VERDICT[st.report.verdict] || VERDICT.insufficient)[0] : '未归纳';
+      return h('li', null, h('button', { type: 'button', onclick: () => { $('progress').hidden = true; render(st); $('result').scrollIntoView({ behavior: 'smooth' }); } },
+        h('span', { class: 'd' }, st.desc || st.product), h('span', { class: 'm' }, C.fmtLocal(st.t, tzMin()) + ' · ' + v)));
+    })));
+    box.append(s);
+  }
+
+  /* ---------- 设置 ---------- */
+  function updateHint() {
+    $('modeHint').textContent = cfg.key ? '' : '还没填 DeepSeek key：现在只能抓取和过滤，没有结论。点右上角「设置」填写。';
+  }
+  function openSettings() {
+    $('sKey').value = cfg.key; $('sBase').value = cfg.base; $('sModel').value = cfg.model; $('sThink').checked = !!cfg.think;
+    $('sTestOut').replaceChildren();
+    const d = $('dlg');
+    if (d.showModal) d.showModal(); else d.setAttribute('open', '');
+  }
+  function saveSettings() {
+    cfg.key = $('sKey').value.trim();
+    cfg.base = baseUrl($('sBase').value) || DEFAULTS.base;
+    cfg.model = $('sModel').value || DEFAULTS.model;
+    cfg.think = $('sThink').checked;
+    if (!store.set(LS.cfg, cfg)) alertText('浏览器不允许保存设置（可能是无痕模式），这次打开期间仍然有效。');
+    updateHint();
+  }
+  function alertText(t) { const box = $('result'); box.prepend(h('p', { class: 'notice' }, t)); box.hidden = false; }
+
+  async function selfTest() {
+    const out = $('sTestOut');
+    out.replaceChildren();
+    const key = $('sKey').value.trim(), b = baseUrl($('sBase').value), model = $('sModel').value;
+    const row = (label) => {
+      const ic = h('span', { class: 'ic' }, ICON.run), note = h('span', { class: 'note' });
+      const li = h('li', { class: 'st-run' }, ic, h('div', null, label, ' ', note));
+      out.append(li);
+      return (state, text) => { li.className = 'st-' + state; ic.textContent = ICON[state]; note.textContent = text || ''; };
+    };
+    const check = (label, fn, skip) => {
+      const set = row(label);
+      if (skip) { set('skip', skip); return Promise.resolve(); }
+      return fn().then((t) => set('ok', t || '可用')).catch((e) => set('fail', e.message));
+    };
+    $('sTest').disabled = true;
+    await Promise.all([
+      check('DeepSeek 模型', () => req(b + '/chat/completions', { method: 'POST', headers: auth(key), body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1, thinking: { type: 'disabled' } }) }, 30000).then(() => '可用'), key ? '' : '没填 key'),
+      check('DeepSeek 搜索', () => req(b + '/v1/tools/search', { method: 'POST', headers: auth(key), body: JSON.stringify({ query: 'status', count: 1 }) }, 25000).then(() => '可用'), key ? '' : '没填 key'),
+      check('GitHub', () => req('https://api.github.com/search/issues?q=' + encodeURIComponent('is:issue repo:anthropics/claude-code') + '&per_page=1').then(() => '可用')),
+      check('Hacker News', () => req('https://hn.algolia.com/api/v1/search_by_date?query=status&hitsPerPage=1').then(() => '可用')),
+      check('官方状态页（以 Claude 为例）', () => req('https://status.claude.com/api/v2/status.json').then((d) => (d.status && d.status.description) || '可用')),
+    ]);
+    $('sTest').disabled = false;
+  }
+
+  /* ---------- 启动 ---------- */
+  function init() {
+    $('win').value = String(cfg.win || 48);
+    updateHint();
+    renderHistory();
+    $('go').addEventListener('click', run);
+    $('desc').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) run(); });
+    $('btnSet').addEventListener('click', openSettings);
+    $('sTest').addEventListener('click', selfTest);
+    $('sClear').addEventListener('click', () => { store.set(LS.hist, []); renderHistory(); $('sTestOut').replaceChildren(h('li', { class: 'st-ok' }, h('span', { class: 'ic' }, ICON.ok), h('div', null, '历史已清空'))); });
+    $('dlg').addEventListener('close', () => { if ($('dlg').returnValue === 'save') saveSettings(); });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();
+
+</script>
+</body>
+</html>
