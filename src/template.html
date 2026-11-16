@@ -58,16 +58,25 @@
 
 <footer class="foot">
   <p>纯前端页面，没有服务器。key 和历史只存在这台设备的浏览器里。</p>
-  <p>版本 v1.1（2026-11-16）</p>
+  <p>版本 v1.2（2026-11-16）</p>
 </footer>
 
 <dialog id="dlg">
   <form method="dialog" class="dlg" novalidate>
     <h2>设置</h2>
+    <label class="lab" for="sProvider">拆解和归纳用哪家模型</label>
+    <select id="sProvider">
+      <option value="deepseek">DeepSeek</option>
+      <option value="gemini">Gemini（有免费额度）</option>
+    </select>
+    <p class="hint">两家的 key 都填时，选中的那家调用失败会自动换另一家。</p>
     <label class="lab" for="sKey">DeepSeek API key</label>
     <input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…">
-    <p class="hint">用于拆解描述、联网搜索和归纳。不填也能用，但只有抓取和过滤，没有结论。</p>
-    <label class="lab" for="sBase">接口地址</label>
+    <p class="hint">联网搜索只能靠它。不填就没有联网搜索，证据只来自 GitHub、Hacker News 和官方状态页。</p>
+    <label class="lab" for="sGKey">Gemini API key</label>
+    <input id="sGKey" type="password" autocomplete="off" spellcheck="false" placeholder="在 aistudio.google.com 申请">
+    <p class="hint">免费档每天次数有限，发送的内容会被 Google 用于改进产品，并且需要梯子。</p>
+    <label class="lab" for="sBase">DeepSeek 接口地址</label>
     <input id="sBase" type="url" autocomplete="off" spellcheck="false">
     <p class="hint">默认直连 DeepSeek。如果自检显示被跨域策略拦截，可以换成你自己的转发地址。</p>
     <label class="lab" for="sModel">模型</label>
@@ -77,7 +86,7 @@
     </div>
     <input id="sModelCustom" type="text" autocomplete="off" spellcheck="false" placeholder="填模型名，如 deepseek-flash" hidden>
     <p class="hint" id="sModelHint"></p>
-    <label class="check"><input id="sThink" type="checkbox"> 归纳时开启深度思考（更慢）</label>
+    <label class="check"><input id="sThink" type="checkbox"> 归纳时开启深度思考（更慢，仅 DeepSeek）</label>
     <div class="row">
       <button id="sTest" class="ghost" type="button">连接自检</button>
       <button id="sClear" class="ghost danger" type="button">清空历史</button>

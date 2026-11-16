@@ -8,9 +8,15 @@
     get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
   };
-  const DEFAULTS = { key: '', base: 'https://api.deepseek.com', model: 'deepseek-flash', think: false, win: 48 };
+  const DEFAULTS = { provider: 'deepseek', key: '', base: 'https://api.deepseek.com', model: 'deepseek-flash', gKey: '', gModel: 'gemini-3.8-flash', think: false, win: 48 };
+  const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
+  const PROVIDERS = {
+    deepseek: { name: 'DeepSeek', known: { 'deepseek-flash': '快，便宜', 'deepseek-v4-pro': '更强，更贵' } },
+    gemini: { name: 'Gemini', known: { 'gemini-3.8-flash': '能力强，免费次数少', 'gemini-3.5-flash-lite': '免费次数多，能力弱些' } },
+  };
+  const newUsage = () => ({ search: 0, tokens: 0, used: {}, fallback: '' });
   let cfg = Object.assign({}, DEFAULTS, store.get(LS.cfg, {}));
-  let usage = { search: 0, tokens: 0 };
+  let usage = newUsage();
   let running = false;
 
   /* ---------- DOM 小工具（外部文本一律走 textContent，不拼 HTML） ---------- */
@@ -76,7 +82,7 @@
   const baseUrl = (b) => String(b || DEFAULTS.base).trim().replace(/\/+$/, '').replace(/\/v1$/, '');
   const auth = (key) => ({ Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' });
 
-  async function chatOnce(messages, maxTokens, think) {
+  async function deepseekChat(messages, maxTokens, think) {
     const body = { model: cfg.model, messages, response_format: { type: 'json_object' }, max_tokens: maxTokens, thinking: { type: think ? 'enabled' : 'disabled' } };
     if (think) body.reasoning_effort = 'high';
     let data;
@@ -88,14 +94,57 @@
     }
     usage.tokens += (data.usage && data.usage.total_tokens) || 0;
     const msg = data.choices && data.choices[0] && data.choices[0].message;
-    return C.extractJson(msg && msg.content);
+    return (msg && msg.content) || '';
   }
+  function geminiError(e, model) {
+    const m = e.message || '';
+    if (/location is not supported/i.test(m)) e.message = '当前网络所在地区用不了 Gemini，需要开梯子';
+    else if (/API key not valid|API_KEY_INVALID/i.test(m)) e.message = 'key 无效';
+    else if (e.status === 429) e.message = '免费额度用完，或请求太频繁';
+    else if (e.status === 404 || /is not found|not supported for generateContent/i.test(m)) e.message = m + '。模型「' + model + '」可能已下线，到「设置」里点「刷新列表」换一个';
+    return e;
+  }
+  async function geminiChat(messages, maxTokens) {
+    const sys = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+    const body = {
+      contents: messages.filter((m) => m.role !== 'system').map((m) => ({ role: 'user', parts: [{ text: m.content }] })),
+      // 思考用掉的 token 也算在输出上限里，给足余量，免得 JSON 被截断
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: Math.max(maxTokens, 8192) },
+    };
+    if (sys) body.systemInstruction = { parts: [{ text: sys }] };
+    let data;
+    try {
+      data = await req(GEMINI + '/models/' + encodeURIComponent(cfg.gModel) + ':generateContent', { method: 'POST', headers: { 'x-goog-api-key': cfg.gKey, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 180000);
+    } catch (e) { throw geminiError(e, cfg.gModel); }
+    usage.tokens += (data.usageMetadata && data.usageMetadata.totalTokenCount) || 0;
+    const cand = data.candidates && data.candidates[0];
+    const parts = (cand && cand.content && cand.content.parts) || [];
+    const text = parts.filter((p) => p && !p.thought && typeof p.text === 'string').map((p) => p.text).join('');
+    if (!text) throw new Error('没有返回内容' + (cand && cand.finishReason ? '（' + cand.finishReason + '）' : ''));
+    return text;
+  }
+  const ready = (p) => (p === 'gemini' ? !!cfg.gKey : !!cfg.key);
+  const anyLLM = () => ready('deepseek') || ready('gemini');
+  /* 先用选中的那家；它失败且另一家也填了 key 时自动换另一家，并在结果里说明 */
   async function chatJson(messages, maxTokens, think) {
-    let v = await chatOnce(messages, maxTokens, think);
-    // 官方文档提醒 JSON 模式偶尔会返回一串空白，这里关掉思考再试一次
-    if (!v) v = await chatOnce(messages, maxTokens, false);
-    if (!v) throw new Error('模型没有返回可解析的 JSON');
-    return v;
+    const first = cfg.provider === 'gemini' ? 'gemini' : 'deepseek';
+    const order = [first, first === 'gemini' ? 'deepseek' : 'gemini'].filter(ready);
+    let lastErr = null;
+    for (const p of order) {
+      try {
+        let v = C.extractJson(p === 'gemini' ? await geminiChat(messages, maxTokens) : await deepseekChat(messages, maxTokens, think));
+        // DeepSeek 文档提醒 JSON 模式偶尔会返回一串空白，关掉思考再试一次
+        if (!v && p === 'deepseek') v = C.extractJson(await deepseekChat(messages, maxTokens, false));
+        if (!v) throw new Error('没有返回可解析的 JSON');
+        if (lastErr) usage.fallback = lastErr.message + '。已自动改用 ' + PROVIDERS[p].name + '。';
+        usage.used[PROVIDERS[p].name] = true;
+        return v;
+      } catch (e) {
+        e.message = PROVIDERS[p].name + '：' + e.message;
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('没有填任何模型的 key');
   }
   async function dsSearch(q, desc) {
     const body = { query: q.q, count: 20 };
@@ -206,19 +255,19 @@
     cfg.win = hours; store.set(LS.cfg, cfg);
     const now = Date.now();
     const notices = [];
-    usage = { search: 0, tokens: 0 };
+    usage = newUsage();
     running = true; $('go').disabled = true; $('go').textContent = '正在查…';
     $('result').hidden = true;
     const add = progress();
-    const hasKey = !!cfg.key;
-    let llmOk = hasKey;
+    const hasLLM = anyLLM(), hasSearch = !!cfg.key;
+    let llmOk = hasLLM;
 
     try {
       // 1 拆解
       const sParse = add('拆解描述');
       sParse('run');
       let parsed;
-      if (hasKey && desc) {
+      if (hasLLM && desc) {
         try {
           parsed = C.normalizeParsed(await chatJson(C.parseMessages(desc), 900, false), desc, manual);
           sParse('ok', parsed.product + ' · ' + parsed.symptoms_en.slice(0, 3).join(' / '));
@@ -226,7 +275,7 @@
           llmOk = false;
           parsed = C.heuristicParse(desc, manual);
           sParse('warn', '模型调用失败（' + e.message + '），改用内置规则');
-          notices.push('DeepSeek 模型调用失败：' + e.message + '。本次没有归纳，只有抓取和过滤。可在「设置」里做连接自检。');
+          notices.push('模型调用失败：' + e.message + '。本次没有归纳，只有抓取和过滤。可在「设置」里做连接自检。');
         }
       } else {
         parsed = C.heuristicParse(desc, manual);
@@ -244,7 +293,7 @@
       let statusInfo = { fetched: false, active: false, summary: '' };
 
       const sSearch = add('联网搜索');
-      if (hasKey) {
+      if (hasSearch) {
         const queries = C.buildQueries(parsed, hours, now);
         sSearch('run', queries.length + ' 条细分查询');
         jobs.push(Promise.allSettled(queries.map((q) => dsSearch(q, desc))).then((rs) => {
@@ -257,7 +306,7 @@
             notices.push('DeepSeek 搜索接口调用失败：' + msg + '。本次结果只来自 GitHub、Hacker News 和官方状态页。');
           } else sSearch(ok.length < rs.length ? 'warn' : 'ok', ok.length + '/' + rs.length + ' 条查询成功，共 ' + n + ' 条结果');
         }));
-      } else sSearch('skip', '没填 key，跳过');
+      } else sSearch('skip', '没填 DeepSeek key，跳过');
 
       const source = (label, fn, okText) => {
         const set = add(label);
@@ -302,8 +351,10 @@
           sLlm('fail', e.message);
           notices.push('归纳这一步失败：' + e.message + '。下面是过滤后的原始条目。');
         }
-      } else sLlm('skip', hasKey ? '模型不可用' : '没填 key，跳过');
-      if (!hasKey) notices.push('没填 DeepSeek key：只做了抓取和机械过滤，没有结论。到「设置」里填 key 可以得到归纳结果。');
+      } else sLlm('skip', hasLLM ? '模型不可用' : '没填 key，跳过');
+      if (!hasLLM) notices.push('没填 key：只做了抓取和机械过滤，没有结论。到「设置」里填 DeepSeek 或 Gemini 的 key 可以得到归纳结果。');
+      else if (!hasSearch) notices.push('没填 DeepSeek key，所以没有联网搜索：证据只来自 GitHub、Hacker News 和官方状态页，Reddit、X 和新闻都没查。');
+      if (usage.fallback) notices.push(usage.fallback);
 
       const state = {
         t: now, desc, hours, product: parsed.product, report, kept, excluded,
@@ -455,7 +506,7 @@
     renderEvidence(box, st);
     renderExcluded(box, st);
     box.append(h('p', { class: 'usage' }, '查询于 ' + C.fmtLocal(st.t, tzMin()) + ' · 时间范围 ' + (st.hours >= 48 ? st.hours / 24 + ' 天' : st.hours + ' 小时') +
-      (st.usage && (st.usage.search || st.usage.tokens) ? ' · 搜索 ' + st.usage.search + ' 次 · 模型 ' + st.usage.tokens + ' tokens' : '')));
+      (st.usage && (st.usage.search || st.usage.tokens) ? ' · 搜索 ' + st.usage.search + ' 次 · 模型 ' + (Object.keys(st.usage.used || {}).join('+') || '') + ' ' + st.usage.tokens + ' tokens' : '')));
     box.hidden = false;
   }
 
@@ -490,55 +541,88 @@
 
   /* ---------- 设置 ---------- */
   function updateHint() {
-    $('modeHint').textContent = cfg.key ? '' : '还没填 DeepSeek key：现在只能抓取和过滤，没有结论。点右上角「设置」填写。';
+    $('modeHint').textContent = !anyLLM() ? '还没填 key：现在只能抓取和过滤，没有结论。点右上角「设置」填写。'
+      : !cfg.key ? '没填 DeepSeek key：有归纳，但没有联网搜索。' : '';
   }
   /* 模型：列表从账号读取并缓存，出了新模型刷新即可；也可以手填任意模型名 */
-  const KNOWN = { 'deepseek-flash': '快，便宜', 'deepseek-v4-pro': '更强，更贵' };
   const CUSTOM = '__custom__';
   const MODEL_HINT = '列表从你的账号读取，出了新模型点「刷新列表」就有。也可以选「手动填写」。';
-  function fillModels(selected) {
-    const listed = cfg.models && cfg.models.length ? cfg.models : Object.keys(KNOWN);
+  let draft = { deepseek: '', gemini: '' }; // 弹窗打开期间，两家各自选中的模型
+  let shown = 'deepseek';                   // 模型下拉框当前显示的是哪一家
+  const curProvider = () => ($('sProvider').value === 'gemini' ? 'gemini' : 'deepseek');
+  const defModel = (p) => (p === 'gemini' ? DEFAULTS.gModel : DEFAULTS.model);
+  const listedOf = (p) => { const l = p === 'gemini' ? cfg.gModels : cfg.models; return l && l.length ? l : Object.keys(PROVIDERS[p].known); };
+  function fillModels(p, selected) {
+    const known = PROVIDERS[p].known, listed = listedOf(p);
     const ids = C.uniq(listed.concat(selected && selected !== CUSTOM ? [selected] : []));
     const sel = $('sModel');
     sel.replaceChildren();
-    ids.forEach((id) => sel.append(h('option', { value: id }, id + (KNOWN[id] ? '（' + KNOWN[id] + '）' : listed.indexOf(id) < 0 ? '（不在当前列表里）' : ''))));
+    ids.forEach((id) => sel.append(h('option', { value: id }, id + (known[id] ? '（' + known[id] + '）' : listed.indexOf(id) < 0 ? '（不在当前列表里）' : ''))));
     sel.append(h('option', { value: CUSTOM }, '手动填写…'));
     sel.value = ids.indexOf(selected) >= 0 ? selected : ids[0];
-    $('sModelCustom').hidden = true;
+    $('sModelCustom').hidden = true; $('sModelCustom').value = '';
+    shown = p;
   }
   function pickedModel() {
     const v = $('sModel').value;
-    return (v === CUSTOM ? $('sModelCustom').value.trim() : v) || DEFAULTS.model;
+    return (v === CUSTOM ? $('sModelCustom').value.trim() : v) || defModel(shown);
   }
+  const stale = (p) => { const at = p === 'gemini' ? cfg.gModelsAt : cfg.modelsAt; return !at || Date.now() - at > C.DAY; };
   async function refreshModels(silent) {
-    const key = $('sKey').value.trim(), hint = $('sModelHint');
-    if (!key) { if (!silent) hint.textContent = '先填 key 才能读取模型列表。'; return; }
+    const p = shown, hint = $('sModelHint');
+    const key = (p === 'gemini' ? $('sGKey') : $('sKey')).value.trim();
+    if (!key) { if (!silent) hint.textContent = '先填 ' + PROVIDERS[p].name + ' 的 key 才能读取模型列表。'; return; }
     $('sModels').disabled = true;
     try {
-      const d = await req(baseUrl($('sBase').value) + '/models', { headers: { Authorization: 'Bearer ' + key } }, 15000);
-      const ids = (Array.isArray(d.data) ? d.data : []).map((m) => m && m.id).filter((x) => typeof x === 'string' && x);
+      let ids;
+      if (p === 'gemini') {
+        const d = await req(GEMINI + '/models?pageSize=1000', { headers: { 'x-goog-api-key': key } }, 15000);
+        ids = (Array.isArray(d.models) ? d.models : [])
+          .filter((m) => m && (!m.supportedGenerationMethods || m.supportedGenerationMethods.indexOf('generateContent') >= 0))
+          .map((m) => String(m.name || '').replace(/^models\//, ''))
+          .filter((id) => /^gemini/.test(id) && !/(tts|image|embedding|live|audio|robotics|computer-use)/.test(id));
+      } else {
+        const d = await req(baseUrl($('sBase').value) + '/models', { headers: { Authorization: 'Bearer ' + key } }, 15000);
+        ids = (Array.isArray(d.data) ? d.data : []).map((m) => m && m.id).filter((x) => typeof x === 'string' && x);
+      }
       if (!ids.length) throw new Error('列表是空的');
-      cfg.models = C.uniq(ids).slice(0, 60); cfg.modelsAt = Date.now();
+      ids = C.uniq(ids).slice(0, 60);
+      if (p === 'gemini') { cfg.gModels = ids; cfg.gModelsAt = Date.now(); } else { cfg.models = ids; cfg.modelsAt = Date.now(); }
       store.set(LS.cfg, cfg);
-      fillModels(pickedModel());
-      if (!silent) hint.textContent = '已读取 ' + cfg.models.length + ' 个模型。';
+      if (shown === p) fillModels(p, pickedModel());
+      if (!silent) hint.textContent = '已读取 ' + ids.length + ' 个 ' + PROVIDERS[p].name + ' 模型。';
     } catch (e) {
+      if (p === 'gemini') geminiError(e, '');
       if (!silent) hint.textContent = '读取失败：' + e.message + '。可以选「手动填写」直接填模型名。';
     } finally { $('sModels').disabled = false; }
   }
+  function switchProvider() {
+    draft[shown] = pickedModel();
+    const p = curProvider();
+    fillModels(p, draft[p] || defModel(p));
+    $('sModelHint').textContent = MODEL_HINT;
+    if ((p === 'gemini' ? $('sGKey') : $('sKey')).value.trim() && stale(p)) refreshModels(true);
+  }
   function openSettings() {
-    $('sKey').value = cfg.key; $('sBase').value = cfg.base; $('sThink').checked = !!cfg.think;
-    $('sModelCustom').value = ''; $('sModelHint').textContent = MODEL_HINT;
-    fillModels(cfg.model);
-    if (cfg.key && (!cfg.modelsAt || Date.now() - cfg.modelsAt > C.DAY)) refreshModels(true);
+    $('sProvider').value = cfg.provider === 'gemini' ? 'gemini' : 'deepseek';
+    $('sKey').value = cfg.key; $('sGKey').value = cfg.gKey || ''; $('sBase').value = cfg.base; $('sThink').checked = !!cfg.think;
+    $('sModelHint').textContent = MODEL_HINT;
+    draft = { deepseek: cfg.model || DEFAULTS.model, gemini: cfg.gModel || DEFAULTS.gModel };
+    const p = curProvider();
+    fillModels(p, draft[p]);
+    if (ready(p) && stale(p)) refreshModels(true);
     $('sTestOut').replaceChildren();
     const d = $('dlg');
     if (d.showModal) d.showModal(); else d.setAttribute('open', '');
   }
   function saveSettings() {
+    draft[shown] = pickedModel();
+    cfg.provider = curProvider();
     cfg.key = $('sKey').value.trim();
+    cfg.gKey = $('sGKey').value.trim();
     cfg.base = baseUrl($('sBase').value) || DEFAULTS.base;
-    cfg.model = pickedModel();
+    cfg.model = draft.deepseek || DEFAULTS.model;
+    cfg.gModel = draft.gemini || DEFAULTS.gModel;
     cfg.think = $('sThink').checked;
     if (!store.set(LS.cfg, cfg)) alertText('浏览器不允许保存设置（可能是无痕模式），这次打开期间仍然有效。');
     updateHint();
@@ -548,7 +632,9 @@
   async function selfTest() {
     const out = $('sTestOut');
     out.replaceChildren();
-    const key = $('sKey').value.trim(), b = baseUrl($('sBase').value), model = pickedModel();
+    draft[shown] = pickedModel();
+    const key = $('sKey').value.trim(), gKey = $('sGKey').value.trim(), b = baseUrl($('sBase').value);
+    const model = draft.deepseek || DEFAULTS.model, gModel = draft.gemini || DEFAULTS.gModel;
     const row = (label) => {
       const ic = h('span', { class: 'ic' }, ICON.run), note = h('span', { class: 'note' });
       const li = h('li', { class: 'st-run' }, ic, h('div', null, label, ' ', note));
@@ -564,6 +650,7 @@
     await Promise.all([
       check('DeepSeek 模型', () => req(b + '/chat/completions', { method: 'POST', headers: auth(key), body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1, thinking: { type: 'disabled' } }) }, 30000).then(() => '可用'), key ? '' : '没填 key'),
       check('DeepSeek 搜索', () => req(b + '/v1/tools/search', { method: 'POST', headers: auth(key), body: JSON.stringify({ query: 'status', count: 1 }) }, 25000).then(() => '可用'), key ? '' : '没填 key'),
+      check('Gemini 模型', () => req(GEMINI + '/models/' + encodeURIComponent(gModel) + ':generateContent', { method: 'POST', headers: { 'x-goog-api-key': gKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'ping' }] }], generationConfig: { maxOutputTokens: 16 } }) }, 30000).then(() => '可用（' + gModel + '）').catch((e) => { throw geminiError(e, gModel); }), gKey ? '' : '没填 key'),
       check('GitHub', () => req('https://api.github.com/search/issues?q=' + encodeURIComponent('is:issue repo:anthropics/claude-code') + '&per_page=1').then(() => '可用')),
       check('Hacker News', () => req('https://hn.algolia.com/api/v1/search_by_date?query=status&hitsPerPage=1').then(() => '可用')),
       check('官方状态页（以 Claude 为例）', () => req('https://status.claude.com/api/v2/status.json').then((d) => (d.status && d.status.description) || '可用')),
@@ -582,6 +669,7 @@
     $('sTest').addEventListener('click', selfTest);
     $('sCancel').addEventListener('click', () => $('dlg').close('cancel'));
     $('sModels').addEventListener('click', () => refreshModels(false));
+    $('sProvider').addEventListener('change', switchProvider);
     $('sModel').addEventListener('change', () => { const on = $('sModel').value === CUSTOM; $('sModelCustom').hidden = !on; if (on) $('sModelCustom').focus(); });
     $('sClear').addEventListener('click', () => { store.set(LS.hist, []); renderHistory(); $('sTestOut').replaceChildren(h('li', { class: 'st-ok' }, h('span', { class: 'ic' }, ICON.ok), h('div', null, '历史已清空'))); });
     $('dlg').addEventListener('close', () => { if ($('dlg').returnValue === 'save') saveSettings(); });

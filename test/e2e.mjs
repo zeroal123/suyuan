@@ -61,10 +61,12 @@ function analysisFor(userContent) {
   };
 }
 
+const PARSED = JSON.stringify({ product: 'Claude', vendor: 'Anthropic', aliases: ['claude.ai'], symptoms_en: ['overloaded error', 'elevated errors'], symptoms_zh: ['报错'], errors: ['overloaded_error'], platform: '网页', status_page: '', github_repos: [], extra_queries: ['Claude Sonnet 5.5 errors'] });
+
 async function setup(browser, opts = {}) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: opts.dark ? 'dark' : 'light' });
   const page = await ctx.newPage();
-  const log = { errors: [], calls: [], unexpected: [], models: [] };
+  const log = { errors: [], calls: [], unexpected: [], models: [], gemini: [] };
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|net::ERR_FAILED/.test(m.text())) log.errors.push(m.text()); });
   page.on('pageerror', (e) => log.errors.push(String(e)));
   page.on('dialog', (d) => { log.errors.push('dialog: ' + d.message()); d.dismiss(); });
@@ -74,6 +76,24 @@ async function setup(browser, opts = {}) {
     log.calls.push(url);
     const json = (o, status = 200) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(o) });
     if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' } });
+    if (url.startsWith('https://generativelanguage.googleapis.com/v1beta/models?')) {
+      assert.equal(req.headers()['x-goog-api-key'], 'g-test');
+      const m = (name, methods) => ({ name: 'models/' + name, supportedGenerationMethods: methods || ['generateContent', 'countTokens'] });
+      return json({ models: [m('gemini-3.8-flash'), m('gemini-3.5-flash-lite'), m('gemini-4-next-flash'), m('gemini-3.8-flash-tts'), m('gemini-embedding-2', ['embedContent']), m('gemma-4'), m('gemini-3.1-flash-image')] });
+    }
+    if (url.startsWith('https://generativelanguage.googleapis.com/') && url.includes(':generateContent')) {
+      log.gemini.push(decodeURIComponent(url.split('/models/')[1].split(':')[0]));
+      assert.equal(req.headers()['x-goog-api-key'], 'g-test');
+      if (opts.geminiQuota) return json({ error: { code: 429, message: 'You exceeded your current quota, please check your plan and billing details.', status: 'RESOURCE_EXHAUSTED' } }, 429);
+      if (opts.geminiRegion) return json({ error: { code: 400, message: 'User location is not supported for the API use.', status: 'FAILED_PRECONDITION' } }, 400);
+      const body = JSON.parse(req.postData());
+      if (!body.systemInstruction) return json({ candidates: [{ content: { parts: [{ text: 'pong' }] }, finishReason: 'MAX_TOKENS' }] }); // 自检的 ping
+      assert.equal(body.generationConfig.responseMimeType, 'application/json');
+      assert.ok(body.generationConfig.maxOutputTokens >= 8192);
+      const sys = body.systemInstruction.parts[0].text, user = body.contents[0].parts[0].text;
+      const content = sys.includes('拆解') ? PARSED : JSON.stringify(analysisFor(user));
+      return json({ candidates: [{ content: { parts: [{ thought: true, text: '{"this":"is thinking, must be ignored"}' }, { text: content }] }, finishReason: 'STOP' }], usageMetadata: { totalTokenCount: 500 } });
+    }
     if (url.endsWith('/models')) {
       if (opts.modelsFail) return route.abort('failed');
       assert.equal(req.headers().authorization, 'Bearer sk-test');
@@ -88,9 +108,7 @@ async function setup(browser, opts = {}) {
       assert.equal(body.response_format.type, 'json_object');
       assert.ok(['enabled', 'disabled'].includes(body.thinking.type));
       const sys = body.messages[0].content;
-      const content = sys.includes('拆解')
-        ? JSON.stringify({ product: 'Claude', vendor: 'Anthropic', aliases: ['claude.ai'], symptoms_en: ['overloaded error', 'elevated errors'], symptoms_zh: ['报错'], errors: ['overloaded_error'], platform: '网页', status_page: '', github_repos: [], extra_queries: ['Claude Sonnet 5.5 errors'] })
-        : '```json\n' + JSON.stringify(analysisFor(body.messages[1].content)) + '\n```';
+      const content = sys.includes('拆解') ? PARSED : '```json\n' + JSON.stringify(analysisFor(body.messages[1].content)) + '\n```';
       return json({ choices: [{ message: { content } }], usage: { total_tokens: 1234 } });
     }
     if (url.endsWith('/v1/tools/search')) {
@@ -140,6 +158,13 @@ async function setup(browser, opts = {}) {
     await page.waitForTimeout(100);
     assert.equal(await savedKey(), 'sk-test', '取消不保存');
   }
+  if (opts.gemini) {
+    await page.click('#btnSet');
+    await page.selectOption('#sProvider', 'gemini');
+    await page.fill('#sGKey', 'g-test');
+    await page.press('#sGKey', 'Enter');
+    await page.waitForFunction(() => { const c = JSON.parse(localStorage.getItem('suyuan.cfg') || '{}'); return c.gKey === 'g-test' && c.provider === 'gemini'; }, null, { timeout: 5000 });
+  }
   return { page, log, ctx };
 }
 const runQuery = async (page, text) => {
@@ -183,7 +208,7 @@ await scenario('有 key：完整流程、去重过滤、结论校验、转义、
   await ref.click();
   assert.equal(await page.locator('#ev-' + n).count(), 1);
   assert.equal(await page.locator('.cause .ref', { hasText: '9999' }).count(), 0, '不存在的编号应被去掉');
-  assert.match(await page.locator('.usage').innerText(), /搜索 \d+ 次 · 模型 2468 tokens/);
+  assert.match(await page.locator('.usage').innerText(), /搜索 \d+ 次 · 模型 DeepSeek 2468 tokens/);
   assert.equal(await page.locator('.links a').count() >= 8, true);
   await page.screenshot({ path: path.join(shots, 'full-light.png'), fullPage: true });
   // 历史：刷新后还在，点开能重新渲染
@@ -198,11 +223,11 @@ await scenario('有 key：完整流程、去重过滤、结论校验、转义、
 
 await scenario('没填 key：只抓取和过滤，不调用 DeepSeek', async () => {
   const { page, log, ctx } = await setup(browser, {});
-  assert.match(await page.locator('#modeHint').innerText(), /还没填 DeepSeek key/);
+  assert.match(await page.locator('#modeHint').innerText(), /还没填 key/);
   await runQuery(page, 'Claude 今天下午突然一直报错，用不了');
   assert.ok(!log.calls.some((u) => u.includes('deepseek')));
   assert.equal(await page.locator('.verdict').count(), 0);
-  assert.match(await page.locator('.notice').first().innerText(), /没填 DeepSeek key/);
+  assert.match(await page.locator('.notice').first().innerText(), /没填 key：只做了抓取和机械过滤/);
   assert.ok((await page.locator('.ev').count()) >= 2);
   assert.match((await page.locator('.ev-title').allInnerTexts()).join('|'), /Elevated errors for Claude/);
   assert.deepEqual(log.errors, []);
@@ -245,8 +270,9 @@ await scenario('设置：连接自检逐项给结果；深色模式可渲染', a
   await page.click('#sTest');
   await page.waitForFunction(() => !document.getElementById('sTest').disabled);
   const rows = await page.locator('#sTestOut li').allInnerTexts();
-  assert.equal(rows.length, 5);
-  assert.ok(rows.every((r) => /可用|All Systems Operational/.test(r)), rows.join(' | '));
+  assert.equal(rows.length, 6);
+  assert.equal(rows.filter((r) => /可用|All Systems Operational/.test(r)).length, 5, rows.join(' | '));
+  assert.match(rows.find((r) => r.includes('Gemini')), /没填 key/);
   await page.screenshot({ path: path.join(shots, 'settings-dark.png') });
   await page.click('#sSave');
   await runQuery(page, 'Claude 今天下午突然一直报错 overloaded_error');
@@ -259,7 +285,7 @@ await scenario('模型：列表从账号读取，新模型刷新即有，也能�
   const { page, log, ctx } = await setup(browser, { key: true, modelGone: true });
   await page.click('#btnSet');
   await page.click('#sModels');
-  await page.waitForFunction(() => /已读取 3 个模型/.test(document.getElementById('sModelHint').textContent));
+  await page.waitForFunction(() => /已读取 3 个 DeepSeek 模型/.test(document.getElementById('sModelHint').textContent));
   const opts = await page.locator('#sModel option').allInnerTexts();
   assert.ok(opts.includes('deepseek-v5-next'), opts.join(' | '));
   assert.equal(opts[opts.length - 1], '手动填写…');
@@ -294,6 +320,89 @@ await scenario('模型列表读取失败：提示手填，不影响保存', asyn
   assert.deepEqual(await page.locator('#sModel option').allInnerTexts(), ['deepseek-flash（快，便宜）', 'deepseek-v4-pro（更强，更贵）', '手动填写…']);
   await page.click('#sSave');
   assert.deepEqual(log.errors, []);
+  await ctx.close();
+});
+
+await scenario('Gemini 归纳 + DeepSeek 搜索：模型调用只走 Gemini，忽略思考片段', async () => {
+  const { page, log, ctx } = await setup(browser, { key: true, gemini: true });
+  await runQuery(page, 'Claude 今天下午突然一直报错 overloaded_error');
+  assert.deepEqual(log.models, [], '不应调用 DeepSeek 模型');
+  assert.deepEqual(log.gemini, ['gemini-3.8-flash', 'gemini-3.8-flash']);
+  assert.ok(log.calls.some((u) => u.endsWith('/v1/tools/search')), '搜索仍走 DeepSeek');
+  assert.equal(await page.locator('.verdict .chip').first().innerText(), '不止你一个');
+  assert.match(await page.locator('.usage').innerText(), /模型 Gemini 1000 tokens/);
+  assert.equal(await page.locator('.notice').count(), 0);
+  // 自检：两家都测
+  await page.click('#btnSet');
+  await page.click('#sTest');
+  await page.waitForFunction(() => !document.getElementById('sTest').disabled);
+  const rows = await page.locator('#sTestOut li').allInnerTexts();
+  assert.equal(rows.filter((r) => /可用|All Systems Operational/.test(r)).length, 6, rows.join(' | '));
+  assert.match(rows.find((r) => r.includes('Gemini')), /可用（gemini-3\.8-flash）/);
+  assert.deepEqual(log.errors, []);
+  assert.deepEqual(log.unexpected, []);
+  await ctx.close();
+});
+
+await scenario('只填 Gemini key：全程不碰 DeepSeek，说明没有联网搜索', async () => {
+  const { page, log, ctx } = await setup(browser, { gemini: true });
+  assert.match(await page.locator('#modeHint').innerText(), /没有联网搜索/);
+  await runQuery(page, 'Claude 今天下午突然一直报错');
+  assert.ok(!log.calls.some((u) => u.includes('deepseek')), '不应有任何 DeepSeek 请求');
+  assert.equal(log.gemini.length, 2);
+  assert.match(await page.locator('.notice').first().innerText(), /没有联网搜索/);
+  assert.equal(await page.locator('.verdict .chip').first().innerText(), '不止你一个');
+  assert.match(await page.locator('#progress').innerText(), /没填 DeepSeek key，跳过/);
+  assert.deepEqual(log.errors, []);
+  assert.deepEqual(log.unexpected, []);
+  await ctx.close();
+});
+
+await scenario('Gemini 额度用完：自动换 DeepSeek 并说明', async () => {
+  const { page, log, ctx } = await setup(browser, { key: true, gemini: true, geminiQuota: true });
+  await runQuery(page, 'Claude 一直报错 overloaded_error');
+  assert.equal(log.gemini.length, 2, '每一步都先试 Gemini');
+  assert.equal(log.models.length, 2, '两步都换到了 DeepSeek');
+  assert.equal(await page.locator('.verdict .chip').first().innerText(), '不止你一个');
+  const notice = (await page.locator('.notice').allInnerTexts()).join(' ');
+  assert.match(notice, /Gemini：免费额度用完/);
+  assert.match(notice, /已自动改用 DeepSeek/);
+  assert.match(await page.locator('.usage').innerText(), /模型 DeepSeek/);
+  assert.deepEqual(log.errors, []);
+  await ctx.close();
+});
+
+await scenario('没开梯子用 Gemini：给出明确原因，其余来源照常出结果', async () => {
+  const { page, log, ctx } = await setup(browser, { gemini: true, geminiRegion: true });
+  await runQuery(page, 'Claude 一直报错');
+  assert.match(await page.locator('#progress').innerText(), /Gemini：当前网络所在地区用不了 Gemini，需要开梯子/);
+  assert.equal(await page.locator('.verdict').count(), 0);
+  assert.ok((await page.locator('.ev').count()) >= 1);
+  assert.deepEqual(log.errors, []);
+  await ctx.close();
+});
+
+await scenario('Gemini 模型列表：只留能做文字生成的；两家各自记住选中的模型', async () => {
+  const { page, log, ctx } = await setup(browser, { key: true, gemini: true });
+  await page.click('#btnSet');
+  await page.click('#sModels');
+  await page.waitForFunction(() => /已读取 3 个 Gemini 模型/.test(document.getElementById('sModelHint').textContent));
+  const opts = await page.locator('#sModel option').allInnerTexts();
+  assert.deepEqual(opts, ['gemini-3.8-flash（能力强，免费次数少）', 'gemini-3.5-flash-lite（免费次数多，能力弱些）', 'gemini-4-next-flash', '手动填写…']);
+  await page.selectOption('#sModel', 'gemini-4-next-flash');
+  await page.selectOption('#sProvider', 'deepseek');
+  assert.equal(await page.locator('#sModel').inputValue(), 'deepseek-flash');
+  await page.selectOption('#sModel', 'deepseek-v4-pro');
+  await page.selectOption('#sProvider', 'gemini');
+  assert.equal(await page.locator('#sModel').inputValue(), 'gemini-4-next-flash', '切回来还是刚才选的');
+  await page.click('#sSave');
+  await page.waitForFunction(() => (JSON.parse(localStorage.getItem('suyuan.cfg') || '{}')).gModel === 'gemini-4-next-flash');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('suyuan.cfg')));
+  assert.deepEqual([saved.provider, saved.model, saved.gModel], ['gemini', 'deepseek-v4-pro', 'gemini-4-next-flash']);
+  await runQuery(page, 'Claude 一直报错');
+  assert.deepEqual(log.gemini, ['gemini-4-next-flash', 'gemini-4-next-flash']);
+  assert.deepEqual(log.errors, []);
+  assert.deepEqual(log.unexpected, []);
   await ctx.close();
 });
 
