@@ -114,6 +114,9 @@ ul.plain { margin: 0; padding-left: 20px; font-size: 15px; }
 /* 证据 */
 .ev { padding: 12px 0; border-top: 1px solid var(--line); scroll-margin-top: 12px; }
 .ev:first-of-type { border-top: 0; padding-top: 0; }
+.side { border-top: 1px solid var(--line); margin-top: 4px; }
+.side > summary { padding: 12px 0 8px; }
+.srcline { margin: 0 0 10px; }
 .ev.flash { animation: flash 1.6s; }
 @keyframes flash { 0%, 60% { background: var(--soft); } 100% { background: transparent; } }
 .ev-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
@@ -194,7 +197,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 
 <footer class="foot">
   <p>纯前端页面，没有服务器。key 和历史只存在这台设备的浏览器里。</p>
-  <p>版本 v1.2（2026-11-16）</p>
+  <p>版本 v1.3（2026-11-16）</p>
 </footer>
 
 <dialog id="dlg">
@@ -567,6 +570,17 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
   const AGG_TITLE = /^is .{1,40} down\b|(outage|status) (tracker|history|map|checker|monitor)|status\s*(&|and)\s*outage|down right now|live (service )?status|current status|is it down/i;
   function pathOf(raw) { try { return new URL(String(raw).trim()).pathname; } catch (e) { return ''; } }
 
+  /* 说明文档：帮助中心、报错对照表这类常年挂着的页面，不是某次事故的报告。更新日志、公告、状态页不算在内。 */
+  const DOC_HOST = /^(docs?|help|support|developers?|learn|manual|wiki|kb|guides?|documentation)\./;
+  const DOC_PATH = /\/(docs?|documentation|help|support|hc|kb|guides?|reference|manual|faq|troubleshooting|api-reference|learn)(\/|$)/i;
+  const DOC_TITLE = /\bdocs\b|documentation|help cent(er|re)|\breference\b|user guide|troubleshooting|\bfaq\b|文档|帮助中心|參考|参考|手册|常见问题/i;
+  const NEWSY = /changelog|release[- ]?notes|what'?s[- ]new|announce|\/news\/|\/blog\/|status|incident|postmortem|更新日志|公告|发布说明/i;
+  function isDocs(it) {
+    const path = pathOf(it.url), t = it.title || '';
+    if (NEWSY.test(path) || NEWSY.test(t)) return false;
+    return DOC_HOST.test(hostOf(it.url)) || DOC_PATH.test(path) || DOC_TITLE.test(t);
+  }
+
   function hostIn(host, list) { return list.some((h) => host === h || host.endsWith('.' + h)); }
   function classifySource(it, ctx) {
     if (it.src === 'status') return 'official';
@@ -595,10 +609,11 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
   const REASON = {
     dup: '同一链接', old: '超出时间范围', noproduct: '没提到这个产品', nosymptom: '没提到故障或症状',
     reponoise: '仓库里的普通 issue，没对上你说的症状', hostcap: '同一网站已留够 12 条',
+    docs: '说明文档，不是这次事故的报告',
     aggregator: '聚合站（只留 2 条当热度信号）', upcap: '上游事件（只留 3 条）', cap: '相关度靠后，超出上限',
     irrelevant: '语义筛选：和你说的不是一回事', restate: '语义筛选：转述同一来源',
   };
-  const TYPE_W = { official: 2.5, community: 1, news: 0.5, aggregator: -1, upstream: 0 };
+  const TYPE_W = { official: 2.5, community: 1, news: 0.5, aggregator: -1, upstream: 0, reference: -0.5 };
 
   function applyFilters(raw, ctx) {
     const excluded = [];
@@ -637,12 +652,19 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
       const productHit = exempt || inBody;
       it.type = it.upstream && !inBody ? 'upstream' : (it.type && it.type !== 'upstream' ? it.type : classifySource(it, ctx));
 
+      it.errorHit = ctx.errorRes.some((re) => re.test(body));
+      // 说明文档不能证明出了事故；只有对上用户给的报错原文时才留下来当参考
+      if ((it.type === 'official' || it.type === 'news') && it.src !== 'status' && isDocs(it)) {
+        if (!it.errorHit) { drop(it, 'docs'); continue; }
+        it.type = 'reference';
+      }
+
       let ts = it.date ? Date.parse(it.date) : NaN;
       if (!isNaN(ts) && ts > ctx.now + DAY) ts = NaN;
       it.ts = isNaN(ts) ? null : ts;
       it.undated = it.ts == null;
       const limit = it.type === 'official' ? Math.max(ctx.windowMs, 7 * DAY) : ctx.windowMs;
-      if (it.ts != null && ctx.now - it.ts > limit) { drop(it, 'old'); continue; }
+      if (it.type !== 'reference' && it.ts != null && ctx.now - it.ts > limit) { drop(it, 'old'); continue; }
 
       const generic = GENERIC.test(body);
       if (it.type === 'upstream') {
@@ -657,7 +679,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
         for (const t of sym.set) if (it.bt.has(t)) hit++;
         if (hit / sym.set.size >= 0.6) { if (sym.weak) weak++; else specific++; }
       }
-      it.errorHit = ctx.errorRes.some((re) => re.test(body));
       const changeWord = it.type === 'official' && CHANGE.test(body);
       if (it.src !== 'status' && it.type !== 'upstream' && !specific && !weak && !generic && !it.errorHit && !changeWord) { drop(it, 'nosymptom'); continue; }
       // 产品自己的 issue 区里每条都带 bug、error 这类词，必须对上具体症状、报错原文，或者跟帖的人很多
@@ -668,7 +689,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
       if (it.type !== 'upstream') s += it.fromRepo ? 1.5 : exempt ? 2 : inTitle ? 3 : 1.5;
       s += Math.min(3, specific * 1.5 + weak * 0.5 + (generic ? 0.5 : 0));
       if (it.errorHit) s += 3;
-      s += it.ts != null ? 2 * Math.exp(-(ctx.now - it.ts) / ctx.windowMs) : -0.5;
+      if (it.type !== 'reference') s += it.ts != null ? 2 * Math.exp(-(ctx.now - it.ts) / ctx.windowMs) : -0.5;
       s += Math.min(1.5, Math.log10(1 + engaged) * 0.75);
       if (it.rerank != null) s += 0.4 * it.rerank;
       it.score = Math.round(s * 1000) / 1000;
@@ -678,8 +699,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 
     // 3 聚合站、上游事件限量
     const main = [], agg = [], up = [];
+    let refs = 0;
     for (const it of pass) {
       if (it.type === 'aggregator') { if (agg.length < 2) agg.push(it); else drop(it, 'aggregator'); }
+      else if (it.type === 'reference') { if (refs < 2) { refs++; agg.push(it); } else drop(it, 'docs'); }
       else if (it.type === 'upstream') { if (up.length < 3) up.push(it); else drop(it, 'upcap'); }
       else main.push(it);
     }
@@ -771,7 +794,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
       let extra = 0;
       for (const id of ids) {
         const it = byId.get(id);
-        if (it.type === 'aggregator') continue;
+        if (it.type === 'aggregator' || it.type === 'reference') continue;
         usable++;
         if (it.type === 'official') official = true;
         if (!keys.has(it.canon)) {
@@ -790,7 +813,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
       const w = weigh(ev);
       let cf = conf(c.confidence), note = '';
       if (!ev.length) { cf = 'low'; note = '无依据'; }
-      else if (!w.usable) { cf = 'low'; note = '只有聚合站，不能当依据'; }
+      else if (!w.usable) { cf = 'low'; note = '只有聚合站或说明文档，不能当依据'; }
       else if (!w.official) {
         if (w.n < 2) { cf = 'low'; note = '单一来源'; }
         else if (w.n < 3 && cf === 'high') cf = 'medium';
@@ -799,7 +822,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
     }).filter((c) => c.title);
 
     let verdict = VERDICTS.indexOf(report.verdict) >= 0 ? report.verdict : 'insufficient';
-    const backed = causes.some((c) => c.evidence.length && c.note !== '只有聚合站，不能当依据');
+    const backed = causes.some((c) => c.evidence.length && c.note !== '只有聚合站或说明文档，不能当依据');
     if (!backed && verdict !== 'likely_local') verdict = 'insufficient';
     let overall = conf(report.confidence);
     const top = causes.length ? causes[0].confidence : 'low';
@@ -858,7 +881,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
     return [{ role: 'system', content: sys }, { role: 'user', content: String(desc || '').slice(0, 1500) }];
   }
 
-  const TYPE_ZH = { official: '官方', community: '社区', news: '新闻', aggregator: '聚合站', upstream: '上游事件' };
+  const TYPE_ZH = { official: '官方', community: '社区', news: '新闻', aggregator: '聚合站', upstream: '上游事件', reference: '说明文档' };
 
   function analysisMessages(desc, p, items, statusSummary, now, offsetMin, windowHours) {
     const sys = [
@@ -872,7 +895,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
       '4. 官方说法也只是一种待核实的说法。要对比官方承认的时间和范围与用户报告是否一致，例如用户先报告了多久官方才承认、官方说的范围是否比用户报告的小。不一致就写出来。',
       '5. 原因类型 type 只能取：provider_outage（服务方故障）、deliberate_change（官方主动变更，如政策、限额、下线、改版、封禁）、upstream（上游依赖故障）、account（账号个别问题）、local（用户本地环境，如网络、代理、版本、缓存）、unknown。',
       '6. 如果证据和用户的症状或时间对不上，verdict 用 insufficient，并在 actions 里给出自查步骤。不要为了给出结论硬凑。时间范围之外的旧事故不能当成这次的原因。',
-      '7. 类型为"聚合站"的条目只能说明有很多人在查或在报，不能作为原因的依据。类型为"上游事件"的条目只有在时间吻合、且有条目把它和这个产品联系起来时才能当原因。',
+      '7. 类型为"聚合站"的条目只能说明有很多人在查或在报，不能作为原因的依据。类型为"说明文档"的条目只能用来解释报错的含义或给出操作建议，不能证明这次出了事故。类型为"上游事件"的条目只有在时间吻合、且有条目把它和这个产品联系起来时才能当原因。',
       '8. 条目的"时间"已经换算成用户时区。timeline 的 time 用 MM-DD HH:mm 格式，直接取条目时间，不要自己换算。',
       '9. 用简体中文，句子短，不要客套话。actions 要具体可执行。',
       '',
@@ -922,7 +945,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
     uniq, clip, canonicalUrl, hostOf, tokens, jaccard, registryFor, extractErrors,
     normalizeParsed, heuristicParse, buildQueries, buildDeepLinks,
     fromDeepseek, fromGithub, fromHN, fromStatuspage, summarizeStatus, fmtLocal, tzLabel,
-    classifySource, makeCtx, applyFilters, extractJson, postProcess, parseMessages, analysisMessages,
+    classifySource, isDocs, makeCtx, applyFilters, extractJson, postProcess, parseMessages, analysisMessages,
   };
 });
 
@@ -1234,7 +1257,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
             const msg = rs[0] && rs[0].reason ? rs[0].reason.message : '未知错误';
             sSearch('fail', '全部失败：' + msg);
             notices.push('DeepSeek 搜索接口调用失败：' + msg + '。本次结果只来自 GitHub、Hacker News 和官方状态页。');
-          } else sSearch(ok.length < rs.length ? 'warn' : 'ok', ok.length + '/' + rs.length + ' 条查询成功，共 ' + n + ' 条结果');
+          } else {
+            const from = (host) => ok.reduce((k, r) => k + r.value.filter((x) => C.hostOf(x.url) === host).length, 0);
+            sSearch(ok.length < rs.length ? 'warn' : 'ok', ok.length + '/' + rs.length + ' 条查询成功，共 ' + n + ' 条结果，其中 Reddit ' + from('reddit.com') + ' 条、X ' + from('x.com') + ' 条');
+          }
         }));
       } else sSearch('skip', '没填 DeepSeek key，跳过');
 
@@ -1306,7 +1332,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
   const VERDICT = { widespread: ['不止你一个', 'red'], official_change: ['官方主动变更', 'blue'], likely_local: ['多半是你这边', 'teal'], mixed: ['部分人受影响', 'amber'], insufficient: ['证据不足', ''] };
   const CONF = { high: ['把握：高', 'teal'], medium: ['把握：中', 'amber'], low: ['把握：低', ''] };
   const CAUSE = { provider_outage: '服务方故障', deliberate_change: '官方主动变更', upstream: '上游依赖故障', account: '账号个别问题', local: '本地环境', unknown: '类型未知' };
-  const TYPE_CHIP = { official: 'blue', community: 'teal', news: '', aggregator: 'amber', upstream: 'amber' };
+  const TYPE_CHIP = { official: 'blue', community: 'teal', news: '', aggregator: 'amber', upstream: 'amber', reference: '' };
 
   function refs(ids) {
     if (!ids || !ids.length) return null;
@@ -1315,6 +1341,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
       onclick: () => {
         const el = $('ev-' + id);
         if (!el) return;
+        const fold = el.closest('details');
+        if (fold && !fold.open) fold.open = true;
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
       },
@@ -1376,18 +1404,32 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
     }
   }
 
+  function sourceCount(items) {
+    const n = { 官方: 0, Reddit: 0, X: 0, GitHub: 0, 'Hacker News': 0, 其他: 0 };
+    items.forEach((it) => {
+      if (it.type === 'official') n.官方++;
+      else if (it.host === 'reddit.com') n.Reddit++;
+      else if (it.host === 'x.com') n.X++;
+      else if (it.host === 'github.com') n.GitHub++;
+      else if (it.host === 'news.ycombinator.com') n['Hacker News']++;
+      else n.其他++;
+    });
+    return n;
+  }
   function renderEvidence(box, st) {
-    const s = section('证据（' + st.kept.length + ' 条）');
-    if (!st.kept.length) s.append(h('p', { class: 'hint' }, '没有符合条件的条目。'));
-    st.kept.forEach((it) => {
+    const main = st.kept.filter((it) => it.rel !== 'related'), side = st.kept.filter((it) => it.rel === 'related');
+    const s = section('证据（' + main.length + ' 条）');
+    if (!main.length) s.append(h('p', { class: 'hint' }, '没有符合条件的条目。'));
+    else { const n = sourceCount(main); s.append(h('p', { class: 'meta srcline' }, '来源：' + Object.keys(n).map((k) => k + ' ' + n[k]).join(' · '))); }
+    const fold = side.length ? h('details', { class: 'side' }, h('summary', null, '同产品、不同问题的条目（' + side.length + ' 条）')) : null;
+    main.concat(side).forEach((it) => {
       const meta = [it.host || ''];
       if (it.ts != null) meta.push(C.fmtLocal(it.ts, tzMin()) + '（' + ago(it.ts, st.t) + '）'); else meta.push('时间未知');
       if (it.comments) meta.push(it.comments + ' 评论');
       if (it.points) meta.push(it.points + ' 赞');
       const snip = it.text ? h('p', { class: 'snip' }, it.text) : null;
       const el = h('article', { class: 'ev', id: 'ev-' + it.id },
-        h('div', { class: 'ev-head' }, h('span', { class: 'ev-id' }, '[' + it.id + ']'), chip(C.TYPE_ZH[it.type] || it.type, TYPE_CHIP[it.type]),
-          it.rel === 'related' ? chip('同产品，不同问题') : null),
+        h('div', { class: 'ev-head' }, h('span', { class: 'ev-id' }, '[' + it.id + ']'), chip(C.TYPE_ZH[it.type] || it.type, TYPE_CHIP[it.type])),
         link(it.url, it.title, 'ev-title'),
         h('p', { class: 'meta' }, meta.filter(Boolean).join(' · ')),
         snip);
@@ -1400,8 +1442,9 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
         d.append(h('ul', { class: 'sim' }, it.similar.map((x) => h('li', null, x.restate ? '转述：' : '', link(x.url, x.title || x.url), ' · ' + (x.host || '')))));
         el.append(d);
       }
-      s.append(el);
+      (it.rel === 'related' ? fold : s).append(el);
     });
+    if (fold) s.append(fold);
     box.append(s);
   }
 
@@ -1430,7 +1473,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
     (st.notices || []).forEach((n) => box.append(h('p', { class: 'notice' }, n)));
     if (st.report) renderReport(box, st.report);
     const ls = section('一键直达');
-    ls.append(h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'Reddit 和 X 不让页面抓取，点开看最新帖子。'));
+    const sc = sourceCount(st.kept);
+    ls.append(h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'Reddit 和 X 不让页面直接抓取，只能靠搜索引擎收录。这次证据里 Reddit ' + sc.Reddit + ' 条、X ' + sc.X + ' 条' + (sc.Reddit + sc.X < 2 ? '，建议点开看一眼最新帖子。' : '。')));
     ls.append(h('div', { class: 'links' }, (st.links || []).map((l) => link(l.url, l.name))));
     box.append(ls);
     renderEvidence(box, st);

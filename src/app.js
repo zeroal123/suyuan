@@ -304,7 +304,10 @@
             const msg = rs[0] && rs[0].reason ? rs[0].reason.message : '未知错误';
             sSearch('fail', '全部失败：' + msg);
             notices.push('DeepSeek 搜索接口调用失败：' + msg + '。本次结果只来自 GitHub、Hacker News 和官方状态页。');
-          } else sSearch(ok.length < rs.length ? 'warn' : 'ok', ok.length + '/' + rs.length + ' 条查询成功，共 ' + n + ' 条结果');
+          } else {
+            const from = (host) => ok.reduce((k, r) => k + r.value.filter((x) => C.hostOf(x.url) === host).length, 0);
+            sSearch(ok.length < rs.length ? 'warn' : 'ok', ok.length + '/' + rs.length + ' 条查询成功，共 ' + n + ' 条结果，其中 Reddit ' + from('reddit.com') + ' 条、X ' + from('x.com') + ' 条');
+          }
         }));
       } else sSearch('skip', '没填 DeepSeek key，跳过');
 
@@ -376,7 +379,7 @@
   const VERDICT = { widespread: ['不止你一个', 'red'], official_change: ['官方主动变更', 'blue'], likely_local: ['多半是你这边', 'teal'], mixed: ['部分人受影响', 'amber'], insufficient: ['证据不足', ''] };
   const CONF = { high: ['把握：高', 'teal'], medium: ['把握：中', 'amber'], low: ['把握：低', ''] };
   const CAUSE = { provider_outage: '服务方故障', deliberate_change: '官方主动变更', upstream: '上游依赖故障', account: '账号个别问题', local: '本地环境', unknown: '类型未知' };
-  const TYPE_CHIP = { official: 'blue', community: 'teal', news: '', aggregator: 'amber', upstream: 'amber' };
+  const TYPE_CHIP = { official: 'blue', community: 'teal', news: '', aggregator: 'amber', upstream: 'amber', reference: '' };
 
   function refs(ids) {
     if (!ids || !ids.length) return null;
@@ -385,6 +388,8 @@
       onclick: () => {
         const el = $('ev-' + id);
         if (!el) return;
+        const fold = el.closest('details');
+        if (fold && !fold.open) fold.open = true;
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
       },
@@ -446,18 +451,32 @@
     }
   }
 
+  function sourceCount(items) {
+    const n = { 官方: 0, Reddit: 0, X: 0, GitHub: 0, 'Hacker News': 0, 其他: 0 };
+    items.forEach((it) => {
+      if (it.type === 'official') n.官方++;
+      else if (it.host === 'reddit.com') n.Reddit++;
+      else if (it.host === 'x.com') n.X++;
+      else if (it.host === 'github.com') n.GitHub++;
+      else if (it.host === 'news.ycombinator.com') n['Hacker News']++;
+      else n.其他++;
+    });
+    return n;
+  }
   function renderEvidence(box, st) {
-    const s = section('证据（' + st.kept.length + ' 条）');
-    if (!st.kept.length) s.append(h('p', { class: 'hint' }, '没有符合条件的条目。'));
-    st.kept.forEach((it) => {
+    const main = st.kept.filter((it) => it.rel !== 'related'), side = st.kept.filter((it) => it.rel === 'related');
+    const s = section('证据（' + main.length + ' 条）');
+    if (!main.length) s.append(h('p', { class: 'hint' }, '没有符合条件的条目。'));
+    else { const n = sourceCount(main); s.append(h('p', { class: 'meta srcline' }, '来源：' + Object.keys(n).map((k) => k + ' ' + n[k]).join(' · '))); }
+    const fold = side.length ? h('details', { class: 'side' }, h('summary', null, '同产品、不同问题的条目（' + side.length + ' 条）')) : null;
+    main.concat(side).forEach((it) => {
       const meta = [it.host || ''];
       if (it.ts != null) meta.push(C.fmtLocal(it.ts, tzMin()) + '（' + ago(it.ts, st.t) + '）'); else meta.push('时间未知');
       if (it.comments) meta.push(it.comments + ' 评论');
       if (it.points) meta.push(it.points + ' 赞');
       const snip = it.text ? h('p', { class: 'snip' }, it.text) : null;
       const el = h('article', { class: 'ev', id: 'ev-' + it.id },
-        h('div', { class: 'ev-head' }, h('span', { class: 'ev-id' }, '[' + it.id + ']'), chip(C.TYPE_ZH[it.type] || it.type, TYPE_CHIP[it.type]),
-          it.rel === 'related' ? chip('同产品，不同问题') : null),
+        h('div', { class: 'ev-head' }, h('span', { class: 'ev-id' }, '[' + it.id + ']'), chip(C.TYPE_ZH[it.type] || it.type, TYPE_CHIP[it.type])),
         link(it.url, it.title, 'ev-title'),
         h('p', { class: 'meta' }, meta.filter(Boolean).join(' · ')),
         snip);
@@ -470,8 +489,9 @@
         d.append(h('ul', { class: 'sim' }, it.similar.map((x) => h('li', null, x.restate ? '转述：' : '', link(x.url, x.title || x.url), ' · ' + (x.host || '')))));
         el.append(d);
       }
-      s.append(el);
+      (it.rel === 'related' ? fold : s).append(el);
     });
+    if (fold) s.append(fold);
     box.append(s);
   }
 
@@ -500,7 +520,8 @@
     (st.notices || []).forEach((n) => box.append(h('p', { class: 'notice' }, n)));
     if (st.report) renderReport(box, st.report);
     const ls = section('一键直达');
-    ls.append(h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'Reddit 和 X 不让页面抓取，点开看最新帖子。'));
+    const sc = sourceCount(st.kept);
+    ls.append(h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'Reddit 和 X 不让页面直接抓取，只能靠搜索引擎收录。这次证据里 Reddit ' + sc.Reddit + ' 条、X ' + sc.X + ' 条' + (sc.Reddit + sc.X < 2 ? '，建议点开看一眼最新帖子。' : '。')));
     ls.append(h('div', { class: 'links' }, (st.links || []).map((l) => link(l.url, l.name))));
     box.append(ls);
     renderEvidence(box, st);

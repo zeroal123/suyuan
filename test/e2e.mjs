@@ -36,6 +36,9 @@ const searchPool = () => [
   { title: 'Anthropic’s Claude hit by elevated errors on newest models', url: 'https://technews.example.com/claude-errors', summary: 'Anthropic confirmed elevated errors on Claude Sonnet 5.5 and Fable 5.2.', date: iso(2), rerank_score: 2.3 },
   { title: 'Anthropic’s Claude hit by elevated errors on newest models', url: 'https://syndicated.example.org/claude-errors-copy', summary: 'Anthropic confirmed elevated errors on Claude Sonnet 5.5 and Fable 5.2. (wire copy)', date: iso(1.9), rerank_score: 1.5 },
   { title: 'Claude subscription price error on my invoice', url: 'https://www.reddit.com/r/ClaudeAI/comments/price77/x/', summary: 'billing issue', date: iso(6), rerank_score: 1.1 },
+  { title: 'Error reference - Claude Code Docs', url: 'https://code.claude.com/docs/en/errors', summary: 'AWS credential resolve timed out. Claude Code error. Check your network and proxy settings.', date: iso(60), rerank_score: 2.0 },
+  { title: 'Errors - Claude API Documentation', url: 'https://docs.claude.com/en/api/errors', summary: 'overloaded_error: The Claude API is temporarily overloaded.', date: iso(24 * 200), rerank_score: 1.8 },
+  { title: 'Claude Code hangs when pasting images, error after update', url: 'https://www.reddit.com/r/ClaudeAI/comments/img555/x/', summary: 'Different bug, started last week.', date: iso(20), rerank_score: 1.0 },
   { title: '<img src=x onerror="window.__xss=1"> Claude error', url: 'javascript:window.__xss=2', summary: '<script>window.__xss=3</script> Claude errors', date: iso(2), rerank_score: 1.0 },
 ];
 const upstream = [{ title: 'Azure outage disrupts services worldwide', url: 'https://cloudnews.example.com/azure', summary: 'A major Azure outage is affecting many services.', date: iso(4), rerank_score: 1.4 }];
@@ -47,7 +50,7 @@ function analysisFor(userContent) {
   const ev = (...f) => f.map(id).filter((x) => x != null);
   return {
     labels: Object.values(ids).map((n) => ({ id: n, rel: 'same', dup_of: null }))
-      .map((l) => (l.id === id('subscription price') ? { ...l, rel: 'irrelevant' } : l.id === id('<img') ? { ...l, rel: 'irrelevant' } : l)),
+      .map((l) => (l.id === id('subscription price') ? { ...l, rel: 'irrelevant' } : l.id === id('<img') ? { ...l, rel: 'irrelevant' } : l.id === id('pasting images') ? { ...l, rel: 'related' } : l)),
     verdict: 'widespread', headline: 'Claude 的 Sonnet 5.5 和 Fable 5.2 出现服务方故障，官方已确认并已恢复。', confidence: 'high',
     causes: [
       { title: '服务方故障：两个新模型错误率升高', type: 'provider_outage', confidence: 'high', why: '官方状态页确认，用户报告的时间和症状一致。', evidence: [...ev('Elevated errors for Claude'), ...ev('overloaded errors for everyone'), 9999], against: [] },
@@ -194,10 +197,18 @@ await scenario('有 key：完整流程、去重过滤、结论校验、转义、
   assert.ok(!titles.some((t) => /thesis|Gemini|yesterday|last month|subscription price|per-session mute/.test(t)), titles.join(' | '));
   assert.equal(titles.filter((t) => t.includes('overloaded errors for everyone')).length, 1, '同一帖子只出现一次');
   assert.ok((await page.locator('.ev details summary').allInnerTexts()).some((t) => /另有 \d+ 条相似/.test(t)));
+  // 说明文档：没对上报错原文的排除，对上的留作参考；同产品的其他问题折叠到后面
+  assert.ok(!titles.includes('Error reference - Claude Code Docs'));
+  assert.equal(await page.locator('.ev', { hasText: 'Errors - Claude API Documentation' }).locator('.chip', { hasText: '说明文档' }).count(), 1);
+  assert.match(await page.locator('.side > summary').innerText(), /同产品、不同问题的条目（1 条）/);
+  assert.equal(await page.locator('.side .ev-title').textContent(), 'Claude Code hangs when pasting images, error after update');
+  assert.equal(await page.locator('.side .ev-title').isVisible(), false, '默认折叠');
+  assert.match(await page.locator('.srcline').innerText(), /来源：官方 \d+ · Reddit \d+ · X 1 · GitHub \d+ · Hacker News \d+ · 其他 \d+/);
+  assert.match(await page.locator('#progress').innerText(), /其中 Reddit \d+ 条、X \d+ 条/);
   assert.match(await page.locator('.excl summary').innerText(), /已排除 \d+ 条/);
   await page.click('.excl summary');
   const excl = await page.locator('.excl').innerText();
-  for (const w of ['超出时间范围', '没提到这个产品', '没提到故障或症状', '聚合站', '和你说的不是一回事']) assert.ok(excl.includes(w), w);
+  for (const w of ['超出时间范围', '没提到这个产品', '没提到故障或症状', '聚合站', '和你说的不是一回事', '说明文档，不是这次事故的报告']) assert.ok(excl.includes(w), w);
   // 转义：恶意标题只能作为文本出现，javascript: 链接必须失效
   assert.equal(await page.evaluate(() => window.__xss), undefined);
   assert.equal(await page.locator('#result img, #result script').count(), 0);

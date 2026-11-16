@@ -196,6 +196,26 @@ test('applyFilters 同一网站最多留 12 条，避免一个来源挤掉其他
   assert.equal(r.excluded.filter((e) => e.reason === 'hostcap').length, 8);
 });
 
+test('applyFilters 说明文档不算事故证据；对上报错原文的留下当参考，更新日志照常保留', () => {
+  // 前两条是真实跑出来的噪音：Claude Code 的报错对照表被当成了官方证据排在最前面
+  const r = C.applyFilters([
+    item({ title: 'Error reference - Claude Code Docs', url: 'https://code.claude.com/docs/en/errors', text: 'AWS default-chain credential resolve timed out. Check your network and proxy settings, then try again. Claude Code error.', date: iso(72) }),
+    item({ title: '錯誤參考 – Claude Code Docs – Failed to write to a teammate’s inbox', url: 'https://code.claude.com/docs/zh-TW/errors', text: 'Claude Code 無法將訊息寫入，error', date: iso(96) }),
+    item({ title: 'Errors - Claude API Documentation', url: 'https://docs.claude.com/en/api/errors', text: 'overloaded_error: The Claude API is temporarily overloaded.', date: iso(24 * 200) }),
+    item({ title: 'Release notes - Claude Docs', url: 'https://docs.claude.com/en/release-notes/overview', text: 'Claude usage limits changed this week.', date: iso(30) }),
+    item({ title: 'The Claude docs are wrong about this error', url: 'https://reddit.com/r/ClaudeAI/comments/d1/x', text: 'errors everywhere' }),
+  ], ctx());
+  const by = (frag) => r.kept.find((k) => k.url.includes(frag));
+  assert.deepEqual(r.excluded.map((e) => e.reason), ['docs', 'docs']);
+  assert.equal(by('/api/errors').type, 'reference', '对上报错原文的文档留下，且不受时间范围限制');
+  assert.equal(by('release-notes').type, 'official');
+  assert.equal(by('reddit.com').type, 'community');
+  assert.ok(by('/api/errors').score < by('reddit.com').score, '说明文档排在真实报告后面');
+  const out = C.postProcess({ verdict: 'widespread', headline: 'h', confidence: 'high', causes: [{ title: 'x', confidence: 'high', evidence: [by('/api/errors').id] }], labels: [] }, r.kept);
+  assert.equal(out.report.causes[0].note, '只有聚合站或说明文档，不能当依据');
+  assert.equal(out.report.verdict, 'insufficient');
+});
+
 test('applyFilters 上游故障条目不要求提到产品，但限量', () => {
   const up = Array.from({ length: 6 }, (_, i) => item({ upstream: true, title: 'Azure outage hits services ' + i + ' z' + i * 13, url: 'https://news' + i + '.example.com/a', text: 'Major outage at Azure number ' + i }));
   const r = C.applyFilters(up, ctx());
@@ -263,7 +283,7 @@ test('postProcess 单一来源、聚合站依据、独立来源不足时自动�
   }, items);
   const [a, b, c] = out.report.causes;
   assert.equal(a.confidence, 'low'); assert.equal(a.note, '单一来源');
-  assert.equal(b.confidence, 'low'); assert.equal(b.note, '只有聚合站，不能当依据');
+  assert.equal(b.confidence, 'low'); assert.equal(b.note, '只有聚合站或说明文档，不能当依据');
   assert.equal(c.confidence, 'medium');
   assert.equal(out.report.confidence, 'low', '总体把握不能高于第一条原因');
 });
