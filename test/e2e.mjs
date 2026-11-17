@@ -43,6 +43,17 @@ const searchPool = () => [
   { title: 'Claude Code hangs when pasting images, error after update', url: 'https://www.reddit.com/r/ClaudeAI/comments/img555/x/', summary: 'Different bug, started last week.', date: iso(20), rerank_score: 1.0 },
   { title: '<img src=x onerror="window.__xss=1"> Claude error', url: 'javascript:window.__xss=2', summary: '<script>window.__xss=3</script> Claude errors', date: iso(2), rerank_score: 1.0 },
 ];
+const cnPool = () => [
+  { title: '微信崩了？消息一直转圈发不出去', url: 'https://weibo.com/1234567/Qabc', summary: '下午三点开始微信消息发不出，一直转圈', date: iso(2), rerank_score: 2.5 },
+  { title: '微信是不是崩了，消息发不出', url: 'https://www.zhihu.com/question/999001', summary: '发不出消息，朋友也一样', date: iso(2.2), rerank_score: 2.2 },
+  { title: '腾讯回应微信故障：已修复，向用户致歉', url: 'https://www.ithome.com/0/900/001.htm', summary: '微信团队回应称下午出现发消息异常，目前已恢复', date: iso(1), rerank_score: 2.4 },
+  { title: '微信发不出消息怎么办 吧友求助', url: 'https://tieba.baidu.com/p/777001', summary: '微信消息发不出去 一直转圈', date: iso(2.5), rerank_score: 1.8 },
+  { title: '微信十年回顾', url: 'https://www.zhihu.com/question/5', summary: '微信的产品设计史', date: iso(3), rerank_score: 1.0 },
+  { title: 'Claude is down', url: 'https://www.reddit.com/r/ClaudeAI/comments/zzz/x/', summary: 'errors', date: iso(2), rerank_score: 0.5 },
+];
+const cnUpstream = [{ title: '阿里云华北机房故障，多个服务宕机', url: 'https://news.example.cn/aliyun', summary: '阿里云出现故障，影响多个应用', date: iso(3), rerank_score: 1.2 }];
+const PARSED_CN = JSON.stringify({ product: '微信', product_zh: '微信', region: 'cn', vendor: '腾讯', aliases: ['WeChat'], symptoms_en: ['cannot send messages'], symptoms_zh: ['发不出消息', '转圈'], errors: [], platform: '手机', status_page: '', github_repos: [], extra_queries: [] });
+
 const upstream = [{ title: 'Azure outage disrupts services worldwide', url: 'https://cloudnews.example.com/azure', summary: 'A major Azure outage is affecting many services.', date: iso(4), rerank_score: 1.4 }];
 
 function analysisFor(userContent) {
@@ -50,6 +61,16 @@ function analysisFor(userContent) {
   for (const m of userContent.matchAll(/^\[(\d+)\] 类型=(\S+) 来源=(\S*)[^\n]*\n标题：([^\n]*)/gm)) ids[m[4]] = +m[1];
   const id = (frag) => { const k = Object.keys(ids).find((t) => t.includes(frag)); return k ? ids[k] : null; };
   const ev = (...f) => f.map(id).filter((x) => x != null);
+  if (userContent.includes('产品类型：国内产品')) {
+    return {
+      labels: Object.values(ids).map((n) => ({ id: n, rel: 'same', dup_of: null })),
+      verdict: 'widespread', headline: '微信下午出现发消息异常，腾讯已回应并修复。', confidence: 'high', status_now: 'resolved',
+      recent: { summary: '下午微信发消息异常，微博和知乎多人报告，腾讯通过媒体回应称已恢复。', evidence: ev('腾讯回应') },
+      causes: [{ title: '服务方故障', type: 'provider_outage', confidence: 'high', why: '多平台同时报告，企业已回应。', evidence: ev('微信崩了', '微信是不是崩了', '腾讯回应'), against: [] }],
+      timeline: [], others: { summary: '微博、知乎、贴吧都有人报告。', scale: '', affected: '', evidence: ev('微信崩了') },
+      official: { statement: '腾讯通过媒体回应已修复。', matches_reports: '一致。', evidence: ev('腾讯回应') }, actions: [{ do: '重试', why: '已恢复' }], unknowns: ['根因未说明'],
+    };
+  }
   return {
     labels: Object.values(ids).map((n) => ({ id: n, rel: 'same', dup_of: null }))
       .map((l) => (l.id === id('subscription price') ? { ...l, rel: 'irrelevant' } : l.id === id('<img') ? { ...l, rel: 'irrelevant' } : l.id === id('pasting images') ? { ...l, rel: 'related' } : l)),
@@ -78,7 +99,7 @@ const PASTED = JSON.stringify({ posts: [
 async function setup(browser, opts = {}) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: opts.dark ? 'dark' : 'light' });
   const page = await ctx.newPage();
-  const log = { errors: [], calls: [], unexpected: [], models: [], gemini: [] };
+  const log = { errors: [], calls: [], unexpected: [], models: [], gemini: [], queries: [] };
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|net::ERR_FAILED/.test(m.text())) log.errors.push(m.text()); });
   page.on('pageerror', (e) => log.errors.push(String(e)));
   page.on('dialog', (d) => { log.errors.push('dialog: ' + d.message()); d.dismiss(); });
@@ -121,7 +142,7 @@ async function setup(browser, opts = {}) {
       assert.ok(['enabled', 'disabled'].includes(body.thinking.type));
       const sys = body.messages[0].content;
       if (sys.includes('复制的原始文本')) { log.pasteReq = body.messages[1].content; return json({ choices: [{ message: { content: PASTED } }], usage: { total_tokens: 300 } }); }
-      const content = sys.includes('拆解') ? PARSED : '```json\n' + JSON.stringify(analysisFor(body.messages[1].content)) + '\n```';
+      const content = sys.includes('拆解') ? (body.messages[1].content.includes('微信') ? PARSED_CN : PARSED) : '```json\n' + JSON.stringify(analysisFor(body.messages[1].content)) + '\n```';
       return json({ choices: [{ message: { content } }], usage: { total_tokens: 1234 } });
     }
     if (url.endsWith('/v1/tools/search')) {
@@ -129,6 +150,9 @@ async function setup(browser, opts = {}) {
       const body = JSON.parse(req.postData());
       assert.ok(body.query.length <= 128);
       assert.ok(!body.ori_question || body.ori_question.length <= 128);
+      log.queries.push(body.query);
+      if (/阿里云/.test(body.query)) return json({ results: cnUpstream });
+      if (/微信|WeChat/.test(body.query)) return json({ results: cnPool() });
       return json({ results: /cloudflare aws azure/.test(body.query) ? upstream : searchPool() });
     }
     if (url.startsWith('https://api.github.com/search/issues')) {
@@ -197,6 +221,9 @@ await scenario('有 key：完整流程、去重过滤、结论校验、转义、
   assert.equal(await page.locator('.verdict .chip').first().innerText(), '不止你一个');
   assert.equal(await page.locator('.verdict .chip').nth(1).innerText(), '把握：高');
   assert.equal(await page.locator('.verdict .chip').nth(2).innerText(), '已恢复');
+  // 模型把只有一条上游新闻的原因标成了「高」，代码改成「低」，并把这次修正显示出来
+  assert.equal(await page.locator('.fixes > summary').innerText(), '代码校验修正了 1 处');
+  assert.match(await page.locator('.fixes li').first().textContent(), /「上游云故障波及」的把握由高调为低：单一来源/);
   // 「最近的情况」紧跟在结论后面、排在「原因」前面；较早的官方公告留下但标为背景
   const heads = await page.locator('#result h2').allInnerTexts();
   assert.deepEqual(heads.slice(0, 2), ['最近的情况', '原因']);
@@ -497,6 +524,57 @@ await scenario('补充材料：群聊内容没有链接也能并入；用 Gemini
   assert.equal(await pasted.locator('a.ev-title').count(), 0, '群聊条目没有链接，标题是纯文本');
   assert.match(await pasted.first().locator('.meta').first().innerText(), /群聊/);
   assert.ok(!log.calls.some((u) => u.includes('deepseek')));
+  assert.deepEqual(log.errors, []);
+  await ctx.close();
+});
+
+await scenario('国内产品模式：查微博知乎贴吧，不查 Reddit、GitHub、Hacker News；可手动改回海外', async () => {
+  const { page, log, ctx } = await setup(browser, { key: true });
+  await runQuery(page, '微信今天下午突然发不出消息，一直转圈');
+  const q1 = log.queries.slice();
+  assert.ok(q1.some((q) => q.includes('site:weibo.com')) && q1.some((q) => q.includes('site:zhihu.com')) && q1.some((q) => q.includes('阿里云')));
+  assert.ok(!q1.some((q) => /site:reddit\.com|site:x\.com|site:github\.com|cloudflare/.test(q)), q1.join(' | '));
+  assert.ok(!log.calls.some((u) => /api\.github\.com|hn\.algolia\.com|status\.claude\.com/.test(u)), '国内产品不查这三处');
+  const prog = await page.locator('#progress').innerText();
+  for (const re of [/国内产品模式/, /其中微博 \d+ 条、知乎 \d+ 条/, /GitHub issues\s*国内产品，不查/, /Hacker News\s*国内产品，不查/, /国内产品一般没有公开状态页/]) assert.match(prog, re);
+  assert.equal(await page.locator('.verdict .chip').first().innerText(), '不止你一个');
+  assert.equal(await page.locator('.verdict .chip').nth(2).innerText(), '已恢复');
+  assert.match(await page.locator('.srcline').innerText(), /来源：官方 0 · 微博 1 · 知乎 1 · 贴吧 1 · 小红书 0 · B 站 0 · 其他 2/);
+  const titles = await page.locator('.ev-title').allInnerTexts();
+  assert.ok(!titles.includes('微信十年回顾') && !titles.includes('Claude is down'));
+  assert.ok((await page.locator('.ev', { hasText: '阿里云华北机房故障' }).locator('.chip', { hasText: '上游事件' }).count()) === 1);
+  const names = await page.locator('.links a').allInnerTexts();
+  assert.ok(names.includes('微博搜索') && names.includes('知乎') && !names.includes('Reddit') && !names.includes('X'));
+  assert.match(await page.locator('.links').locator('xpath=preceding-sibling::p').innerText(), /这次证据里微博 1 条、知乎 1 条/);
+  assert.equal(await page.locator('#pSrc').inputValue(), 'weibo');
+  // 手动改成海外产品：换回原来的那套
+  await page.click('#adv > summary');
+  await page.selectOption('#mRegion', 'global');
+  log.queries.length = 0;
+  await runQuery(page, '微信今天下午突然发不出消息，一直转圈');
+  assert.ok(log.queries.some((q) => q.includes('site:reddit.com')));
+  assert.ok(log.calls.some((u) => u.includes('api.github.com')));
+  assert.ok(!(await page.locator('#progress').innerText()).includes('国内产品模式'));
+  assert.deepEqual(log.errors, []);
+  assert.deepEqual(log.unexpected, []);
+  await ctx.close();
+});
+
+await scenario('国内产品模式：没填 key 时用内置名单识别，直达链接照样换成国内平台', async () => {
+  const { page, log, ctx } = await setup(browser, {});
+  await runQuery(page, '学习通今天打不开，一直白屏');
+  const prog = await page.locator('#progress').innerText();
+  assert.match(prog, /学习通 · .*（内置规则） · 国内产品模式/);
+  // 国内产品什么都没搜到时：不判成「你这边的问题」，说明里也不出现 Reddit、X
+  assert.equal(await page.locator('.verdict .chip').first().innerText(), '证据不足');
+  const whole = await page.locator('#result').innerText();
+  assert.match(whole, /国内平台的内容要登录才看得全，帖子可能被删，热搜也可能被撤/);
+  assert.ok(!/Reddit|GitHub|Hacker News/.test(whole), '国内产品的结果里不该出现海外平台名');
+  assert.equal(log.calls.length, 0, '没有 key 的国内产品查询不发任何请求');
+  assert.match(await page.locator('.notice').first().innerText(), /国内产品的线索全靠联网搜索。没填 DeepSeek key 时页面什么都查不到/);
+  assert.equal(await page.locator('.notice').count(), 1, '不再同时显示那条「只做了抓取和过滤」的通用提示');
+  const names = await page.locator('.links a').allInnerTexts();
+  assert.ok(names.includes('微博搜索') && names.includes('百度资讯'));
   assert.deepEqual(log.errors, []);
   await ctx.close();
 });

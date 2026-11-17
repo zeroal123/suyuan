@@ -45,6 +45,12 @@
       <input id="mProduct" type="text" autocomplete="off" placeholder="如 Claude">
       <label class="lab" for="mKw">关键词</label>
       <input id="mKw" type="text" autocomplete="off" placeholder="英文更好，逗号分隔，如 error, overloaded">
+      <label class="lab" for="mRegion">产品类型</label>
+      <select id="mRegion">
+        <option value="">自动判断</option>
+        <option value="global">海外产品（查 Reddit、X、GitHub）</option>
+        <option value="cn">国内产品（查微博、知乎、贴吧）</option>
+      </select>
       <label class="lab" for="mStatus">官方状态页</label>
       <input id="mStatus" type="url" autocomplete="off" placeholder="https://status.example.com">
     </details>
@@ -58,7 +64,7 @@
 
 <footer class="foot">
   <p>纯前端页面，没有服务器。key 和历史只存在这台设备的浏览器里。</p>
-  <p>版本 v1.5（2026-11-17）</p>
+  <p>版本 v1.6（2026-11-17）</p>
 </footer>
 
 <dialog id="dlg">

@@ -156,6 +156,42 @@ test('applyFilters 官方公告放宽到 30 天并标为背景；状态页事故
   assert.ok(!/时间=11-16[^\n]*早于时间范围/.test(user));
 });
 
+test('postProcess 归因和连贯性校验：原因类型要有对应证据，结论类型要和原因对得上，时间线排序，修正都记下来', () => {
+  const { items, id } = evItems();
+  const out = C.postProcess({
+    verdict: 'official_change', headline: 'h', confidence: 'high',
+    causes: [
+      { title: '限额政策调整', type: 'deliberate_change', confidence: 'high', evidence: [id('r1/x'), id('item?id=5'), id('r9/x')] },
+      { title: '上游云故障', type: 'upstream', confidence: 'high', evidence: [id('r1/x'), id('item?id=5'), id('r9/x')] },
+      { title: '服务方故障', type: 'provider_outage', confidence: 'high', evidence: [id('status.claude')] },
+    ],
+    timeline: [
+      { time: '11-16 17:04', event: '解决', evidence: [] }, { time: '11-16 15:49', event: '开始调查', evidence: [] },
+      { time: '11-16 16:02', event: '部署修复', evidence: [] },
+    ],
+    labels: [],
+  }, items);
+  const [a, b, c] = out.report.causes;
+  assert.deepEqual([a.confidence, a.note], ['medium', '没有官方公告佐证']);
+  assert.deepEqual([b.confidence, b.note], ['low', '没有上游事件的条目佐证']);
+  assert.deepEqual([c.confidence, c.note], ['high', '']);
+  assert.equal(out.report.verdict, 'official_change', '有一条带证据的主动变更原因，结论类型保留');
+  assert.deepEqual(out.report.timeline.map((t) => t.event), ['开始调查', '部署修复', '解决']);
+  assert.equal(out.report.fixes.length, 3);
+  assert.match(out.report.fixes.join('|'), /「限额政策调整」的把握由高调为中：没有官方公告佐证/);
+  assert.match(out.report.fixes.join('|'), /总体把握由高调为中：不能高于第一条原因/);
+
+  const v1 = C.postProcess({ verdict: 'official_change', confidence: 'high', causes: [{ title: '服务方故障', type: 'provider_outage', confidence: 'high', evidence: [id('status.claude')] }], labels: [] }, evItems().items);
+  assert.equal(v1.report.verdict, 'widespread');
+  assert.match(v1.report.fixes.join('|'), /结论类型由「官方主动变更」改为「普遍问题」/);
+  const e2 = evItems();
+  const v2 = C.postProcess({ verdict: 'likely_local', confidence: 'high', causes: [{ title: '服务方故障', type: 'provider_outage', confidence: 'high', evidence: [e2.id('status.claude')] }], labels: [] }, e2.items);
+  assert.equal(v2.report.verdict, 'mixed', '说是本地问题，却引用了官方确认的服务方故障，两者矛盾');
+  const e3 = evItems();
+  const v3 = C.postProcess({ verdict: 'widespread', confidence: 'high', causes: [{ title: '服务方故障', type: 'provider_outage', confidence: 'high', evidence: [e3.id('status.claude')] }], labels: [] }, e3.items);
+  assert.deepEqual(v3.report.fixes, [], '没有矛盾时不做任何修正');
+});
+
 test('postProcess 透传「最近的情况」和「现在的状态」，并校验取值', () => {
   const { items, id } = evItems();
   const out = C.postProcess({ verdict: 'widespread', headline: 'h', confidence: 'high', status_now: 'resolved',
@@ -287,6 +323,57 @@ test('粘贴的帖子不受同一网站 12 条上限限制，并排在搜到的�
   const r = C.applyFilters([...found, pasted], ctx());
   assert.ok(r.kept.some((k) => k.pasted));
   assert.equal(r.kept.filter((k) => k.host === 'reddit.com' && !k.pasted).length, 12);
+});
+
+test('国内产品模式：识别、查询、直达链接和提示词都换成国内的一套', () => {
+  // 识别：国内产品走 cn；描述里顺带提到微博时，产品仍是 Claude
+  assert.equal(C.registryFor('微信今天发不出消息').region, 'cn');
+  assert.equal(C.registryFor('Claude 挂了，微博上都在说').product, 'Claude');
+  const p = C.heuristicParse('微信今天下午突然发不出消息，一直转圈', {});
+  assert.deepEqual([p.product, p.region, p.product_zh, p.product_en, p.status_page], ['微信', 'cn', '微信', 'WeChat', '']);
+  assert.ok(p.symptoms_zh.includes('发不出') && p.symptoms_zh.includes('转圈'));
+  assert.equal(parsed.region, 'global');
+  // 模型判断的地区会被采用；手动指定优先于一切
+  assert.equal(C.normalizeParsed({ product: '某校教务系统', region: 'cn' }, 'x', {}).region, 'cn');
+  assert.equal(C.normalizeParsed({ product: '某校教务系统' }, 'x', {}).region, 'cn', '中文产品名默认按国内处理');
+  assert.equal(C.normalizeParsed({ product: 'Foo', region: 'cn' }, 'x', { region: 'global' }).region, 'global');
+  assert.equal(C.normalizeParsed({ product: '微信' }, 'x', { region: 'global' }).region, 'global');
+  // 查询
+  const qs = C.buildQueries(p, 48, NOW);
+  const all = qs.map((q) => q.q).join('\n');
+  assert.ok(qs.length >= 9 && qs.length <= 15);
+  for (const q of qs) assert.ok(q.q.length <= 128, q.q);
+  for (const need of ['site:weibo.com', 'site:zhihu.com', 'site:tieba.baidu.com', '微信 崩了 故障 用不了', '回应 致歉', '阿里云 腾讯云', 'WeChat']) assert.ok(all.includes(need), need);
+  for (const no of ['site:reddit.com', 'site:x.com', 'site:github.com', 'cloudflare']) assert.ok(!all.includes(no), no);
+  assert.ok(qs.find((q) => q.upstream));
+  assert.match(qs.find((q) => q.label === '官方变更').q, /after:2026-10-16$/);
+  // 海外产品的中文查询用中文名
+  const g = C.normalizeParsed({ product: 'ChatGPT', product_zh: '', region: 'global', symptoms_zh: ['登不上'] }, 'x', {});
+  assert.ok(C.buildQueries(g, 48, NOW).some((q) => q.label === 'Reddit'));
+  // 直达链接
+  const names = C.buildDeepLinks(p).map((l) => l.name);
+  for (const n of ['微博搜索', '知乎', '贴吧', '小红书', 'B 站', '百度资讯']) assert.ok(names.includes(n), n);
+  assert.ok(!names.includes('Reddit') && !names.includes('X') && !names.includes('Downdetector'));
+  for (const l of C.buildDeepLinks(p)) assert.match(l.url, /^https:\/\//);
+  // 过滤：国内平台算社区；阿里云故障算上游事件；产品名用中文也能命中
+  const c = C.makeCtx(p, 48, NOW);
+  assert.equal(C.classifySource({ url: 'https://www.xiaohongshu.com/explore/1', title: 'x' }, c), 'community');
+  assert.equal(C.classifySource({ url: 'https://m.weibo.cn/detail/1', title: 'x' }, c), 'community');
+  const r = C.applyFilters([
+    item({ title: '微信崩了？消息一直转圈发不出去', url: 'https://weibo.com/1/a' }),
+    item({ title: 'WeChat outage hits users', url: 'https://technews.example.com/wechat' }),
+    item({ title: '支付宝崩了', url: 'https://weibo.com/1/b' }),
+    item({ upstream: true, title: '阿里云华北机房故障，多个服务宕机', url: 'https://news.example.cn/aliyun' }),
+  ], c);
+  assert.deepEqual(r.kept.map((k) => k.type).sort(), ['community', 'news', 'upstream']);
+  assert.deepEqual(r.excluded.map((e) => e.reason), ['noproduct']);
+  // 提示词
+  const user = C.analysisMessages('微信发不出消息', p, r.kept, '', NOW, 480, 48)[1].content;
+  assert.match(user, /产品类型：国内产品/);
+  assert.match(user, /证据少时 verdict 用 insufficient/);
+  assert.ok(!C.analysisMessages('x', parsed, [], '', NOW, 480, 48)[1].content.includes('国内产品'));
+  assert.match(C.parseMessages('x')[0].content, /"region"/);
+  assert.equal(C.PASTE_SOURCES.weibo.host, 'weibo.com');
 });
 
 test('applyFilters 上游故障条目不要求提到产品，但限量', () => {

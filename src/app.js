@@ -229,11 +229,12 @@
     { do: '换一个网络，或关掉、更换代理节点再试', why: '很多「突然用不了」是出口 IP 被限制，换线路就能分辨' },
     { do: '换设备或浏览器，或用无痕窗口', why: '排除缓存、插件和客户端版本的问题' },
     { do: '退出重新登录，看注册邮箱和站内通知', why: '排除账号被限制、欠费、额度用完' },
-    { do: '用下面的直达链接看各平台最新帖子', why: 'Reddit 和 X 只能跳转过去看，页面抓不到' },
+    { do: '用下面的直达链接看各平台最新帖子', why: '这些平台只能跳转过去看，页面抓不到全貌' },
     { do: '过 15 到 30 分钟再查一次，或把时间范围调大', why: '刚发生的故障通常要过一会儿才有人发帖' },
   ];
-  function emptyReport(statusFetched, statusActive) {
+  function emptyReport(statusFetched, statusActive, region) {
     const calm = statusFetched && !statusActive;
+    const cn = region === 'cn';
     return {
       verdict: calm ? 'likely_local' : 'insufficient',
       headline: calm
@@ -244,14 +245,14 @@
       others: { summary: '没有找到其他人的报告。', scale: '', affected: '', evidence: [] },
       official: { statement: calm ? '状态页没有未解决的事故。' : '', matches_reports: '', evidence: [] },
       actions: SELF_CHECK,
-      unknowns: ['没找到不等于没有：页面抓不到 Reddit、X 和群聊里的内容。'],
+      unknowns: [cn ? '没找到不等于没有：国内平台的内容要登录才看得全，帖子可能被删，热搜也可能被撤。' : '没找到不等于没有：页面抓不到 Reddit、X 和群聊里的内容。'],
     };
   }
 
   async function run() {
     if (running) return;
     const desc = $('desc').value.trim();
-    const manual = { product: $('mProduct').value.trim(), keywords: $('mKw').value.trim(), status: $('mStatus').value.trim() };
+    const manual = { product: $('mProduct').value.trim(), keywords: $('mKw').value.trim(), status: $('mStatus').value.trim(), region: $('mRegion').value };
     if (!desc && !manual.product) { $('desc').focus(); return; }
     const hours = +$('win').value || 48;
     cfg.win = hours; store.set(LS.cfg, cfg);
@@ -272,7 +273,7 @@
       if (hasLLM && desc) {
         try {
           parsed = C.normalizeParsed(await chatJson(C.parseMessages(desc), 900, false), desc, manual);
-          sParse('ok', parsed.product + ' · ' + parsed.symptoms_en.slice(0, 3).join(' / '));
+          sParse('ok', parsed.product + ' · ' + (parsed.region === 'cn' ? parsed.symptoms_zh : parsed.symptoms_en).slice(0, 3).join(' / ') + (parsed.region === 'cn' ? ' · 国内产品模式' : ''));
         } catch (e) {
           llmOk = false;
           parsed = C.heuristicParse(desc, manual);
@@ -281,7 +282,7 @@
         }
       } else {
         parsed = C.heuristicParse(desc, manual);
-        sParse('ok', (parsed.product || '?') + ' · ' + (parsed.symptoms_en.slice(0, 3).join(' / ') || '无症状词') + '（内置规则）');
+        sParse('ok', (parsed.product || '?') + ' · ' + ((parsed.region === 'cn' ? parsed.symptoms_zh : parsed.symptoms_en).slice(0, 3).join(' / ') || '无症状词') + '（内置规则）' + (parsed.region === 'cn' ? ' · 国内产品模式' : ''));
       }
       if (!parsed.product) {
         sParse('fail', '没认出是哪个产品，请在「手动指定」里填产品名');
@@ -308,7 +309,8 @@
             notices.push('DeepSeek 搜索接口调用失败：' + msg + '。本次结果只来自 GitHub、Hacker News 和官方状态页。');
           } else {
             const from = (host) => ok.reduce((k, r) => k + r.value.filter((x) => C.hostOf(x.url) === host).length, 0);
-            sSearch(ok.length < rs.length ? 'warn' : 'ok', ok.length + '/' + rs.length + ' 条查询成功，共 ' + n + ' 条结果，其中 Reddit ' + from('reddit.com') + ' 条、X ' + from('x.com') + ' 条');
+            const split = parsed.region === 'cn' ? '微博 ' + (from('weibo.com') + from('weibo.cn')) + ' 条、知乎 ' + from('zhihu.com') + ' 条' : ' Reddit ' + from('reddit.com') + ' 条、X ' + from('x.com') + ' 条';
+            sSearch(ok.length < rs.length ? 'warn' : 'ok', ok.length + '/' + rs.length + ' 条查询成功，共 ' + n + ' 条结果，其中' + split);
           }
         }));
       } else sSearch('skip', '没填 DeepSeek key，跳过');
@@ -321,8 +323,14 @@
           set(r.failed ? 'warn' : 'ok', okText(r) + (r.failed ? '（' + r.failed + '/' + r.total + ' 个请求失败：' + r.firstError.message + '）' : ''));
         }).catch((e) => set('fail', e.message)));
       };
-      source('GitHub issues', () => collectGithub(parsed, hours, now), (r) => r.items.length + ' 条');
-      source('Hacker News', () => collectHN(parsed, hours, now), (r) => r.items.length + ' 条');
+      if (parsed.region === 'cn') {
+        // 国内产品的线索不在这两个地方，查了只会带回噪音
+        add('GitHub issues')('skip', '国内产品，不查');
+        add('Hacker News')('skip', '国内产品，不查');
+      } else {
+        source('GitHub issues', () => collectGithub(parsed, hours, now), (r) => r.items.length + ' 条');
+        source('Hacker News', () => collectHN(parsed, hours, now), (r) => r.items.length + ' 条');
+      }
       const sStatus = add('官方状态页');
       if (parsed.status_page) {
         sStatus('run');
@@ -331,7 +339,7 @@
           statusInfo = { fetched: true, active: r.active, summary: r.summary };
           sStatus('ok', (r.summary || '已读取') + ' · 近期事故 ' + r.items.length + ' 条');
         }).catch((e) => sStatus('fail', e.message + '，请点下方「官方状态页」手动看')));
-      } else sStatus('skip', parsed.status_link ? '这个状态页不支持自动读取，下方有直达链接' : '不知道它的状态页地址，可在「手动指定」里填');
+      } else sStatus('skip', parsed.status_link ? '这个状态页不支持自动读取，下方有直达链接' : parsed.region === 'cn' ? '国内产品一般没有公开状态页，改查微博和新闻里的企业回应' : '不知道它的状态页地址，可在「手动指定」里填');
       await Promise.all(jobs);
 
       // 3 机械去重过滤
@@ -340,7 +348,8 @@
       sFilter('ok', '共 ' + f.stats.total + ' 条 → 留下 ' + f.kept.length + ' 条，相似归组 ' + f.stats.similar + ' 条，排除 ' + f.excluded.length + ' 条');
 
       // 4 语义筛选与归纳
-      if (!hasLLM) notices.push('没填 key：只做了抓取和机械过滤，没有结论。到「设置」里填 DeepSeek 或 Gemini 的 key 可以得到归纳结果。');
+      if (parsed.region === 'cn' && !hasSearch) notices.push('国内产品的线索全靠联网搜索。没填 DeepSeek key 时页面什么都查不到，只能用下面的直达链接自己看。');
+      else if (!hasLLM) notices.push('没填 key：只做了抓取和机械过滤，没有结论。到「设置」里填 DeepSeek 或 Gemini 的 key 可以得到归纳结果。');
       else if (!hasSearch) notices.push('没填 DeepSeek key，所以没有联网搜索：证据只来自 GitHub、Hacker News 和官方状态页，Reddit、X 和新闻都没查。');
       const c = { desc, hours, now, parsed, raw, statusInfo, pasted: [], baseNotices: notices.slice() };
       const res = await analyze(c, f, add('语义筛选与归纳'), llmOk, notices);
@@ -361,7 +370,7 @@
   async function analyze(c, f, sLlm, llmOk, notices) {
     let report = null, kept = f.kept, excluded = f.excluded;
     if (!f.kept.length) {
-      report = emptyReport(c.statusInfo.fetched, c.statusInfo.active);
+      report = emptyReport(c.statusInfo.fetched, c.statusInfo.active, c.parsed.region);
       sLlm('skip', '没有可用条目，不调用模型');
     } else if (llmOk) {
       sLlm('run', cfg.think ? '深度思考中，可能要一两分钟' : '');
@@ -381,13 +390,15 @@
     return {
       t: c.now, desc: c.desc, hours: c.hours, product: c.parsed.product, report: res.report, kept: res.kept, excluded: res.excluded,
       stats: Object.assign({}, f.stats, { kept: res.kept.length, excluded: res.excluded.length }),
-      links: C.buildDeepLinks(c.parsed), usage: Object.assign({}, usage), notices, live: true,
+      links: C.buildDeepLinks(c.parsed), usage: Object.assign({}, usage), notices, live: true, region: c.parsed.region,
     };
   }
 
   /* ---------- 补充材料：把自己在 Reddit、X 或群里看到的内容粘贴进来，并入证据后重新归纳 ---------- */
+  const PASTE_LINK = { reddit: 'Reddit', x: 'X', weibo: '微博搜索', zhihu: '知乎' };
   function pasteCard(n) {
     const sel = h('select', { id: 'pSrc' }, Object.keys(C.PASTE_SOURCES).map((k) => h('option', { value: k }, C.PASTE_SOURCES[k].name)));
+    if (lastRun && lastRun.parsed.region === 'cn') sel.value = 'weibo';
     const ta = h('textarea', { id: 'pText', rows: '5', placeholder: '把你在 Reddit、X 或群里看到的内容粘贴到这里。夹着按钮、导航文字也没关系。' });
     const btn = h('button', { id: 'pGo', class: 'primary', type: 'button', onclick: () => addPaste(sel.value, ta.value) }, '并入证据，重新归纳');
     return h('details', { class: 'card paste' },
@@ -418,8 +429,7 @@
         const out = await chatJson(C.pasteMessages(text, src.name, c.parsed.product, Date.now(), tzMin()), 6000, false);
         posts = Array.isArray(out.posts) ? out.posts : [];
       } catch (e) { sSplit('fail', e.message); say('拆分失败：' + e.message); return; }
-      const name = srcKey === 'reddit' ? 'Reddit' : srcKey === 'x' ? 'X' : '';
-      const linkOf = C.buildDeepLinks(c.parsed).find((l) => l.name === name);
+      const linkOf = C.buildDeepLinks(c.parsed).find((l) => l.name === PASTE_LINK[srcKey]);
       const items = posts.slice(0, 30).map((p) => C.fromPaste(p, srcKey, Date.now(), linkOf ? linkOf.url : '')).filter(Boolean);
       if (!items.length) { sSplit('warn', '没认出帖子'); say('没从这段内容里认出和「' + c.parsed.product + '」有关的帖子。'); return; }
       const have = new Set(c.pasted.map((i) => i.canonKey));
@@ -474,7 +484,10 @@
     const ns = NOW_STATE[r.status_now];
     box.append(h('section', { class: 'card verdict v-' + r.verdict },
       h('div', { class: 'chips' }, chip(v[0], v[1]), chip(cf[0], cf[1]), ns ? chip(ns[0], ns[1]) : null),
-      h('p', { class: 'headline' }, r.headline || v[0])));
+      h('p', { class: 'headline' }, r.headline || v[0]),
+      r.fixes && r.fixes.length
+        ? h('details', { class: 'fixes' }, h('summary', null, '代码校验修正了 ' + r.fixes.length + ' 处'), h('ul', { class: 'plain' }, r.fixes.map((f) => h('li', null, f))))
+        : null));
     // 先交代时间范围内的最近情况，再往下讲原因；较早的官方公告只作背景，不写在这里
     if (r.recent && r.recent.summary) {
       const s = section('最近的情况');
@@ -529,23 +542,29 @@
     }
   }
 
-  function sourceCount(items) {
-    const n = { 官方: 0, Reddit: 0, X: 0, GitHub: 0, 'Hacker News': 0, 其他: 0 };
+  const SRC_HOSTS = [['reddit.com', 'Reddit'], ['x.com', 'X'], ['github.com', 'GitHub'], ['news.ycombinator.com', 'Hacker News'],
+    ['weibo.com', '微博'], ['weibo.cn', '微博'], ['zhihu.com', '知乎'], ['tieba.baidu.com', '贴吧'], ['xiaohongshu.com', '小红书'], ['bilibili.com', 'B 站']];
+  const SRC_SHOW = { global: ['Reddit', 'X', 'GitHub', 'Hacker News'], cn: ['微博', '知乎', '贴吧', '小红书', 'B 站'] };
+  /* 返回按顺序排好的来源计数：当前产品类型对应的平台即使是 0 也显示，其他平台有才显示 */
+  function sourceCount(items, region) {
+    const n = {};
     items.forEach((it) => {
-      if (it.type === 'official') n.官方++;
-      else if (it.host === 'reddit.com') n.Reddit++;
-      else if (it.host === 'x.com') n.X++;
-      else if (it.host === 'github.com') n.GitHub++;
-      else if (it.host === 'news.ycombinator.com') n['Hacker News']++;
-      else n.其他++;
+      const host = it.host || '';
+      const hit = it.type === 'official' ? null : SRC_HOSTS.find((p) => host === p[0] || host.endsWith('.' + p[0]));
+      const k = it.type === 'official' ? '官方' : hit ? hit[1] : '其他';
+      n[k] = (n[k] || 0) + 1;
     });
-    return n;
+    const main = SRC_SHOW[region === 'cn' ? 'cn' : 'global'];
+    const rest = C.uniq(SRC_HOSTS.map((p) => p[1])).filter((k) => main.indexOf(k) < 0 && n[k]);
+    const out = {};
+    ['官方'].concat(main, rest, ['其他']).forEach((k) => { out[k] = n[k] || 0; });
+    return out;
   }
   function renderEvidence(box, st) {
     const main = st.kept.filter((it) => it.rel !== 'related'), side = st.kept.filter((it) => it.rel === 'related');
     const s = section('证据（' + main.length + ' 条）');
     if (!main.length) s.append(h('p', { class: 'hint' }, '没有符合条件的条目。'));
-    else { const n = sourceCount(main); s.append(h('p', { class: 'meta srcline' }, '来源：' + Object.keys(n).map((k) => k + ' ' + n[k]).join(' · '))); }
+    else { const n = sourceCount(main, st.region); s.append(h('p', { class: 'meta srcline' }, '来源：' + Object.keys(n).map((k) => k + ' ' + n[k]).join(' · '))); }
     const fold = side.length ? h('details', { class: 'side' }, h('summary', null, '同产品、不同问题的条目（' + side.length + ' 条）')) : null;
     main.concat(side).forEach((it) => {
       const meta = [it.host || ''];
@@ -598,8 +617,12 @@
     (st.notices || []).forEach((n) => box.append(h('p', { class: 'notice' }, n)));
     if (st.report) renderReport(box, st.report);
     const ls = section('一键直达');
-    const sc = sourceCount(st.kept);
-    ls.append(h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'Reddit 和 X 不让页面直接抓取，只能靠搜索引擎收录。这次证据里 Reddit ' + sc.Reddit + ' 条、X ' + sc.X + ' 条' + (sc.Reddit + sc.X < 2 ? '，建议点开看一眼最新帖子。' : '。')));
+    const sc = sourceCount(st.kept, st.region);
+    const pair = st.region === 'cn' ? ['微博', '知乎'] : ['Reddit', 'X'];
+    const few = sc[pair[0]] + sc[pair[1]] < 2;
+    ls.append(h('p', { class: 'hint', style: 'margin:0 0 8px' },
+      (st.region === 'cn' ? '国内平台的内容要登录才看得全，页面只能靠搜索引擎收录，而且帖子可能被删。' : 'Reddit 和 X 不让页面直接抓取，只能靠搜索引擎收录。') +
+      '这次证据里' + pair[0] + ' ' + sc[pair[0]] + ' 条、' + pair[1] + ' ' + sc[pair[1]] + ' 条' + (few ? '，建议点开看一眼最新帖子。' : '。')));
     ls.append(h('div', { class: 'links' }, (st.links || []).map((l) => link(l.url, l.name))));
     box.append(ls);
     if (st.live && lastRun && cfg.paste !== false && anyLLM()) box.append(pasteCard(st.kept.filter((k) => k.pasted).length));
@@ -613,7 +636,7 @@
   /* ---------- 历史 ---------- */
   function slim(st) {
     return {
-      t: st.t, desc: st.desc, hours: st.hours, product: st.product, report: st.report, links: st.links, usage: st.usage, notices: st.notices,
+      t: st.t, desc: st.desc, hours: st.hours, product: st.product, region: st.region, report: st.report, links: st.links, usage: st.usage, notices: st.notices,
       stats: st.stats,
       kept: st.kept.map((it) => ({ id: it.id, type: it.type, src: it.src, title: it.title, url: it.url, host: it.host, ts: it.ts, text: C.clip(it.text, 300), similar: it.similar, comments: it.comments, points: it.points, rel: it.rel, pasted: it.pasted || undefined, older: it.older || undefined })),
     };

@@ -100,6 +100,9 @@ ul.plain { margin: 0; padding-left: 20px; font-size: 15px; }
 /* 证据 */
 .ev { padding: 12px 0; border-top: 1px solid var(--line); scroll-margin-top: 12px; }
 .ev:first-of-type { border-top: 0; padding-top: 0; }
+.fixes { margin-top: 8px; }
+.fixes > summary { font-size: 13px; padding: 4px 0 0; min-height: 28px; }
+.fixes ul { font-size: 13.5px; color: var(--mute); }
 .card.paste > summary { padding: 0; min-height: 28px; font-size: 15px; color: var(--ink); }
 span.ev-title:hover { text-decoration: none; }
 .side { border-top: 1px solid var(--line); margin-top: 4px; }
