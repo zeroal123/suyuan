@@ -36,6 +36,8 @@ const searchPool = () => [
   { title: 'Anthropic’s Claude hit by elevated errors on newest models', url: 'https://technews.example.com/claude-errors', summary: 'Anthropic confirmed elevated errors on Claude Sonnet 5.5 and Fable 5.2.', date: iso(2), rerank_score: 2.3 },
   { title: 'Anthropic’s Claude hit by elevated errors on newest models', url: 'https://syndicated.example.org/claude-errors-copy', summary: 'Anthropic confirmed elevated errors on Claude Sonnet 5.5 and Fable 5.2. (wire copy)', date: iso(1.9), rerank_score: 1.5 },
   { title: 'Claude subscription price error on my invoice', url: 'https://www.reddit.com/r/ClaudeAI/comments/price77/x/', summary: 'billing issue', date: iso(6), rerank_score: 1.1 },
+  { title: 'Changes to Claude usage limits', url: 'https://www.anthropic.com/news/usage-limits-update', summary: 'Starting this month, weekly usage limits change for Claude plans.', date: iso(24 * 20), rerank_score: 1.6 },
+  { title: 'Claude pricing policy update', url: 'https://www.anthropic.com/news/pricing-update-old', summary: 'Policy change for Claude plans.', date: iso(24 * 40), rerank_score: 1.6 },
   { title: 'Error reference - Claude Code Docs', url: 'https://code.claude.com/docs/en/errors', summary: 'AWS credential resolve timed out. Claude Code error. Check your network and proxy settings.', date: iso(60), rerank_score: 2.0 },
   { title: 'Errors - Claude API Documentation', url: 'https://docs.claude.com/en/api/errors', summary: 'overloaded_error: The Claude API is temporarily overloaded.', date: iso(24 * 200), rerank_score: 1.8 },
   { title: 'Claude Code hangs when pasting images, error after update', url: 'https://www.reddit.com/r/ClaudeAI/comments/img555/x/', summary: 'Different bug, started last week.', date: iso(20), rerank_score: 1.0 },
@@ -52,6 +54,7 @@ function analysisFor(userContent) {
     labels: Object.values(ids).map((n) => ({ id: n, rel: 'same', dup_of: null }))
       .map((l) => (l.id === id('subscription price') ? { ...l, rel: 'irrelevant' } : l.id === id('<img') ? { ...l, rel: 'irrelevant' } : l.id === id('pasting images') ? { ...l, rel: 'related' } : l)),
     verdict: 'widespread', headline: 'Claude 的 Sonnet 5.5 和 Fable 5.2 出现服务方故障，官方已确认并已恢复。', confidence: 'high',
+    status_now: 'resolved', recent: { summary: '今天下午两个模型报错约一小时，官方已标记解决；目前没有未解决的问题。', evidence: [...ev('Elevated errors for Claude'), 4242] },
     causes: [
       { title: '服务方故障：两个新模型错误率升高', type: 'provider_outage', confidence: 'high', why: '官方状态页确认，用户报告的时间和症状一致。', evidence: [...ev('Elevated errors for Claude'), ...ev('overloaded errors for everyone'), 9999], against: [] },
       { title: '上游云故障波及', type: 'upstream', confidence: 'high', why: '同期有 Azure 故障报道。', evidence: ev('Azure outage'), against: [] },
@@ -193,6 +196,16 @@ await scenario('有 key：完整流程、去重过滤、结论校验、转义、
   assert.equal(await page.locator('#result').isVisible(), true);
   assert.equal(await page.locator('.verdict .chip').first().innerText(), '不止你一个');
   assert.equal(await page.locator('.verdict .chip').nth(1).innerText(), '把握：高');
+  assert.equal(await page.locator('.verdict .chip').nth(2).innerText(), '已恢复');
+  // 「最近的情况」紧跟在结论后面、排在「原因」前面；较早的官方公告留下但标为背景
+  const heads = await page.locator('#result h2').allInnerTexts();
+  assert.deepEqual(heads.slice(0, 2), ['最近的情况', '原因']);
+  assert.match(await page.locator('#result .card', { hasText: '最近的情况' }).first().innerText(), /今天下午两个模型报错约一小时/);
+  assert.equal(await page.locator('#result .card', { hasText: '最近的情况' }).first().locator('.ref').count(), 1, '不存在的编号被去掉');
+  const older = page.locator('.ev', { hasText: 'Changes to Claude usage limits' });
+  assert.equal(await older.locator('.chip', { hasText: '早于时间范围，仅作背景' }).count(), 1);
+  assert.equal(await page.locator('.ev', { hasText: 'Claude pricing policy update' }).count(), 0, '40 天前的公告仍然排除');
+  assert.equal(await page.locator('.ev', { hasText: 'Elevated errors for Claude Sonnet 5.5' }).locator('.chip', { hasText: '早于时间范围' }).count(), 0);
   // 第二条原因只有 1 条上游新闻作依据，代码应把模型给的 high 压成 low 并标「单一来源」
   const cause2 = page.locator('.cause').nth(1);
   assert.match(await cause2.innerText(), /把握：低/);

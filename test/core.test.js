@@ -97,6 +97,8 @@ test('buildQueries 拆成多条细查询，长度合规且不重复', () => {
   assert.match(all, /"overloaded_error"/);
   assert.match(all, /after:2026-11-13/);
   assert.ok(!/after:2026-11-1[4-9]/.test(all), '48 小时窗口要多留一天余量');
+  assert.match(qs.find((q) => q.label === '官方变更').q, /after:2026-10-16$/, '官方变更往回看 30 天');
+  assert.match(qs.find((q) => q.label === '官方通告').q, /after:2026-11-08$/, '官方事故通告仍是 7 天');
   assert.match(all, /lang:zh/);
   assert.ok(qs.some((q) => q.upstream));
   const noErr = C.buildQueries(Object.assign({}, parsed, { errors: [] }), 48, NOW);
@@ -128,6 +130,42 @@ test('applyFilters 去掉过期帖，但官方条目放宽到 7 天', () => {
   assert.ok(r.kept.some((k) => k.url.endsWith('/incidents/a')));
   const undated = r.kept.find((k) => k.url.endsWith('new1/x'));
   assert.ok(undated && undated.undated);
+});
+
+test('applyFilters 官方公告放宽到 30 天并标为背景；状态页事故仍是 7 天；较早的公告最多留 5 条', () => {
+  const note = (n, days, title) => item({ title: title || ('Claude usage limits update ' + n + ' v' + n * 7919), url: 'https://www.anthropic.com/news/limits-' + n, text: 'New weekly limits change for Claude plans, item ' + n, date: iso(24 * days) });
+  const r = C.applyFilters([
+    note(1, 20), note(2, 40),
+    item({ title: 'Claude limits changed today', url: 'https://www.anthropic.com/news/today', text: 'Limits change', date: iso(3) }),
+    item({ src: 'status', type: 'official', title: 'Elevated errors on Claude', url: 'https://status.claude.com/incidents/w5', date: iso(24 * 5) }),
+    item({ src: 'status', type: 'official', title: 'Elevated errors three weeks ago', url: 'https://status.claude.com/incidents/w20', date: iso(24 * 20) }),
+    item({ title: 'Claude limits are worse, errors too', url: 'https://reddit.com/r/ClaudeAI/comments/lim20/x', date: iso(24 * 20) }),
+  ], ctx());
+  const by = (frag) => r.kept.find((k) => k.url.includes(frag));
+  const why = Object.fromEntries(r.excluded.map((e) => [e.url.split('/').pop(), e.reason]));
+  assert.equal(by('limits-1').older, true, '20 天前的官方公告留下，标为早于时间范围');
+  assert.equal(by('/today').older, false);
+  assert.equal(by('w5').older, true);
+  assert.deepEqual(why, { 'limits-2': 'old', w20: 'old', x: 'old' });
+  assert.ok(by('/today').score > by('limits-1').score, '最近的排在较早的前面');
+  const many = C.applyFilters(Array.from({ length: 9 }, (_, i) => note(i + 10, 10 + i)), ctx());
+  assert.equal(many.kept.length, 5);
+  assert.equal(many.excluded.filter((e) => e.reason === 'oldcap').length, 4);
+  const user = C.analysisMessages('Claude 限额变了', parsed, r.kept, '', NOW, 480, 48)[1].content;
+  assert.match(user, /\[\d+\] 类型=官方 来源=anthropic\.com 时间=10-27[^\n]*备注=早于时间范围，仅作背景/);
+  assert.ok(!/时间=11-16[^\n]*早于时间范围/.test(user));
+});
+
+test('postProcess 透传「最近的情况」和「现在的状态」，并校验取值', () => {
+  const { items, id } = evItems();
+  const out = C.postProcess({ verdict: 'widespread', headline: 'h', confidence: 'high', status_now: 'resolved',
+    recent: { summary: '下午的故障已恢复，深夜又有一条新事件在调查。', evidence: [id('status.claude'), 777] },
+    causes: [{ title: 'x', confidence: 'high', evidence: [id('status.claude')] }], labels: [] }, items);
+  assert.equal(out.report.status_now, 'resolved');
+  assert.deepEqual(out.report.recent, { summary: '下午的故障已恢复，深夜又有一条新事件在调查。', evidence: [id('status.claude')] });
+  const bad = C.postProcess({ verdict: 'widespread', status_now: 'fine', causes: [], labels: [] }, items);
+  assert.equal(bad.report.status_now, 'unknown');
+  assert.deepEqual(bad.report.recent, { summary: '', evidence: [] });
 });
 
 test('applyFilters 去掉没提到产品或没提到故障的', () => {

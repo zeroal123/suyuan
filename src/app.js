@@ -239,7 +239,8 @@
       headline: calm
         ? '没找到其他人在报同样的问题，官方状态页也没有未解决的事故。多半是你这边的问题，或者故障刚开始还没人发帖。'
         : '时间范围内没找到相关报告，暂时下不了结论。',
-      confidence: 'low', causes: [], timeline: [],
+      confidence: 'low', causes: [], timeline: [], status_now: 'unknown',
+      recent: { summary: calm ? '时间范围内没有搜到相关报告，官方状态页也没有未解决的事故。' : '时间范围内没有搜到相关报告。', evidence: [] },
       others: { summary: '没有找到其他人的报告。', scale: '', affected: '', evidence: [] },
       official: { statement: calm ? '状态页没有未解决的事故。' : '', matches_reports: '', evidence: [] },
       actions: SELF_CHECK,
@@ -447,6 +448,7 @@
   /* ---------- 渲染 ---------- */
   const VERDICT = { widespread: ['不止你一个', 'red'], official_change: ['官方主动变更', 'blue'], likely_local: ['多半是你这边', 'teal'], mixed: ['部分人受影响', 'amber'], insufficient: ['证据不足', ''] };
   const CONF = { high: ['把握：高', 'teal'], medium: ['把握：中', 'amber'], low: ['把握：低', ''] };
+  const NOW_STATE = { ongoing: ['仍在持续', 'red'], resolved: ['已恢复', 'teal'] };
   const CAUSE = { provider_outage: '服务方故障', deliberate_change: '官方主动变更', upstream: '上游依赖故障', account: '账号个别问题', local: '本地环境', unknown: '类型未知' };
   const TYPE_CHIP = { official: 'blue', community: 'teal', news: '', aggregator: 'amber', upstream: 'amber', reference: '' };
 
@@ -469,9 +471,16 @@
 
   function renderReport(box, r) {
     const v = VERDICT[r.verdict] || VERDICT.insufficient, cf = CONF[r.confidence] || CONF.low;
+    const ns = NOW_STATE[r.status_now];
     box.append(h('section', { class: 'card verdict v-' + r.verdict },
-      h('div', { class: 'chips' }, chip(v[0], v[1]), chip(cf[0], cf[1])),
+      h('div', { class: 'chips' }, chip(v[0], v[1]), chip(cf[0], cf[1]), ns ? chip(ns[0], ns[1]) : null),
       h('p', { class: 'headline' }, r.headline || v[0])));
+    // 先交代时间范围内的最近情况，再往下讲原因；较早的官方公告只作背景，不写在这里
+    if (r.recent && r.recent.summary) {
+      const s = section('最近的情况');
+      s.append(h('p', { style: 'margin:0;font-size:15px' }, r.recent.summary, refs(r.recent.evidence)));
+      box.append(s);
+    }
 
     if (r.causes.length) {
       const s = section('原因');
@@ -545,7 +554,7 @@
       if (it.points) meta.push(it.points + ' 赞');
       const snip = it.text ? h('p', { class: 'snip' }, it.text) : null;
       const el = h('article', { class: 'ev', id: 'ev-' + it.id },
-        h('div', { class: 'ev-head' }, h('span', { class: 'ev-id' }, '[' + it.id + ']'), chip(C.TYPE_ZH[it.type] || it.type, TYPE_CHIP[it.type]), it.pasted ? chip('你粘贴的', 'amber') : null),
+        h('div', { class: 'ev-head' }, h('span', { class: 'ev-id' }, '[' + it.id + ']'), chip(C.TYPE_ZH[it.type] || it.type, TYPE_CHIP[it.type]), it.pasted ? chip('你粘贴的', 'amber') : null, it.older ? chip('早于时间范围，仅作背景') : null),
         it.url ? link(it.url, it.title, 'ev-title') : h('span', { class: 'ev-title' }, it.title),
         h('p', { class: 'meta' }, meta.filter(Boolean).join(' · ')),
         snip);
@@ -606,7 +615,7 @@
     return {
       t: st.t, desc: st.desc, hours: st.hours, product: st.product, report: st.report, links: st.links, usage: st.usage, notices: st.notices,
       stats: st.stats,
-      kept: st.kept.map((it) => ({ id: it.id, type: it.type, src: it.src, title: it.title, url: it.url, host: it.host, ts: it.ts, text: C.clip(it.text, 300), similar: it.similar, comments: it.comments, points: it.points, rel: it.rel, pasted: it.pasted || undefined })),
+      kept: st.kept.map((it) => ({ id: it.id, type: it.type, src: it.src, title: it.title, url: it.url, host: it.host, ts: it.ts, text: C.clip(it.text, 300), similar: it.similar, comments: it.comments, points: it.points, rel: it.rel, pasted: it.pasted || undefined, older: it.older || undefined })),
     };
   }
   function saveHistory(st, replace) {
