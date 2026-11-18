@@ -100,24 +100,45 @@
   function geminiError(e, model) {
     const m = e.message || '';
     if (/location is not supported/i.test(m)) e.message = '当前网络所在地区用不了 Gemini，需要开梯子';
-    else if (m === '超时' || /^连不上/.test(m)) e.message = m + '：请求没收到 Google 的任何回应，和 key 无关。多半是梯子没有接管 generativelanguage.googleapis.com，试试切到全局模式';
+    else if (m === '超时') e.message = '超时：Google 没在规定时间内回应。先点「刷新列表」：能读出模型，说明网络和 key 都没问题，是生成太慢，换一个 lite 模型再试；读不出，才是梯子没接管 generativelanguage.googleapis.com';
+    else if (/^连不上/.test(m)) e.message = m + '：请求没到达 Google，和 key 无关。多半是梯子没接管 generativelanguage.googleapis.com，试试切到全局模式';
     else if (/ACCESS_TOKEN_TYPE_UNSUPPORTED|Expected OAuth 2 access token/i.test(m)) e.message = 'Google 不接受这个 key（AQ 开头的新格式密钥常见问题），试试在 Google Cloud 控制台的项目里重新生成一个只限 Gemini 的 key';
     else if (/API key not valid|API_KEY_INVALID/i.test(m)) e.message = 'key 无效';
     else if (e.status === 429) e.message = '免费额度用完，或请求太频繁';
     else if (e.status === 404 || /is not found|not supported for generateContent/i.test(m)) e.message = m + '。模型「' + model + '」可能已下线，到「设置」里点「刷新列表」换一个';
     return e;
   }
+  /* Gemini 3 以后的模型默认会先思考，深度 medium 起，慢且占输出额度。查询和自检都把它压到 low；
+     2.5 及更早的模型不认这个字段，不发 */
+  const thinksByLevel = (model) => /^gemini-(?:[3-9]|\d{2,})|^gemini-(?:flash|pro)(?:-lite)?-latest$/.test(model);
+  function geminiGen(model, extra) {
+    const g = Object.assign({}, extra);
+    if (thinksByLevel(model)) g.thinkingConfig = { thinkingLevel: 'low' };
+    return g;
+  }
+  async function geminiPost(model, key, body, ms) {
+    const url = GEMINI + '/models/' + encodeURIComponent(model) + ':generateContent';
+    const send = (b) => req(url, { method: 'POST', headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' }, body: JSON.stringify(b) }, ms);
+    try { return await send(body); } catch (e) {
+      // 模型不认思考深度这个字段时，去掉再试一次
+      if (e.status === 400 && /thinking/i.test(e.message) && body.generationConfig && body.generationConfig.thinkingConfig) {
+        const b = JSON.parse(JSON.stringify(body)); delete b.generationConfig.thinkingConfig;
+        return send(b);
+      }
+      throw e;
+    }
+  }
   async function geminiChat(messages, maxTokens) {
     const sys = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
     const body = {
       contents: messages.filter((m) => m.role !== 'system').map((m) => ({ role: 'user', parts: [{ text: m.content }] })),
       // 思考用掉的 token 也算在输出上限里，给足余量，免得 JSON 被截断
-      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: Math.max(maxTokens, 8192) },
+      generationConfig: geminiGen(cfg.gModel, { responseMimeType: 'application/json', maxOutputTokens: Math.max(maxTokens, 8192) }),
     };
     if (sys) body.systemInstruction = { parts: [{ text: sys }] };
     let data;
     try {
-      data = await req(GEMINI + '/models/' + encodeURIComponent(cfg.gModel) + ':generateContent', { method: 'POST', headers: { 'x-goog-api-key': cfg.gKey, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 180000);
+      data = await geminiPost(cfg.gModel, cfg.gKey, body, 180000);
     } catch (e) { throw geminiError(e, cfg.gModel); }
     usage.tokens += (data.usageMetadata && data.usageMetadata.totalTokenCount) || 0;
     const cand = data.candidates && data.candidates[0];
@@ -780,7 +801,7 @@
     await Promise.all([
       check('DeepSeek 模型', () => req(b + '/chat/completions', { method: 'POST', headers: auth(key), body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1, thinking: { type: 'disabled' } }) }, 30000).then(() => '可用'), key ? '' : '没填 key'),
       check('DeepSeek 搜索', () => req(b + '/v1/tools/search', { method: 'POST', headers: auth(key), body: JSON.stringify({ query: 'status', count: 1 }) }, 25000).then(() => '可用'), key ? '' : '没填 key'),
-      check('Gemini 模型', () => req(GEMINI + '/models/' + encodeURIComponent(gModel) + ':generateContent', { method: 'POST', headers: { 'x-goog-api-key': gKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'ping' }] }], generationConfig: { maxOutputTokens: 16 } }) }, 30000).then(() => '可用（' + gModel + '）').catch((e) => { throw geminiError(e, gModel); }), gKey ? '' : '没填 key'),
+      check('Gemini 模型', () => geminiPost(gModel, gKey, { contents: [{ role: 'user', parts: [{ text: 'ping' }] }], generationConfig: geminiGen(gModel, { maxOutputTokens: 512 }) }, 60000).then(() => '可用（' + gModel + '）').catch((e) => { throw geminiError(e, gModel); }), gKey ? '' : '没填 key'),
       check('GitHub', () => req('https://api.github.com/search/issues?q=' + encodeURIComponent('is:issue repo:anthropics/claude-code') + '&per_page=1').then(() => '可用')),
       check('Hacker News', () => req('https://hn.algolia.com/api/v1/search_by_date?query=status&hitsPerPage=1').then(() => '可用')),
       check('官方状态页（以 Claude 为例）', () => req('https://status.claude.com/api/v2/status.json').then((d) => (d.status && d.status.description) || '可用')),

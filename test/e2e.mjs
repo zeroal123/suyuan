@@ -122,7 +122,11 @@ async function setup(browser, opts = {}) {
       if (opts.geminiHang) return route.abort('timedout');
       if (opts.geminiAQ) return json({ error: { code: 401, message: 'Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential.', status: 'UNAUTHENTICATED', details: [{ reason: 'ACCESS_TOKEN_TYPE_UNSUPPORTED' }] } }, 401);
       const body = JSON.parse(req.postData());
-      if (!body.systemInstruction) return json({ candidates: [{ content: { parts: [{ text: 'pong' }] }, finishReason: 'MAX_TOKENS' }] }); // 自检的 ping
+      const model = decodeURIComponent(url.split('/models/')[1].split(':')[0]);
+      log.thinking = log.thinking || [];
+      log.thinking.push(model + '=' + (body.generationConfig.thinkingConfig ? body.generationConfig.thinkingConfig.thinkingLevel : 'none'));
+      if (opts.rejectThinking && body.generationConfig.thinkingConfig) return json({ error: { code: 400, message: 'Unknown name "thinkingLevel" at generation_config.thinking_config', status: 'INVALID_ARGUMENT' } }, 400);
+      if (!body.systemInstruction) return json({ candidates: [{ content: { parts: [{ text: 'pong' }] }, finishReason: 'STOP' }] }); // 自检的 ping
       assert.equal(body.generationConfig.responseMimeType, 'application/json');
       assert.ok(body.generationConfig.maxOutputTokens >= 8192);
       const sys = body.systemInstruction.parts[0].text, user = body.contents[0].parts[0].text;
@@ -582,7 +586,7 @@ await scenario('国内产品模式：没填 key 时用内置名单识别，直�
 });
 
 await scenario('Gemini 自检：网络不通和新格式 key 被拒，各给出对应的提示', async () => {
-  for (const [opt, re] of [['geminiHang', /和 key 无关。多半是梯子没有接管 generativelanguage\.googleapis\.com/], ['geminiAQ', /Google 不接受这个 key（AQ 开头的新格式密钥常见问题）/]]) {
+  for (const [opt, re] of [['geminiHang', /请求没到达 Google，和 key 无关。多半是梯子没接管/], ['geminiAQ', /Google 不接受这个 key（AQ 开头的新格式密钥常见问题）/]]) {
     const { page, ctx } = await setup(browser, { key: true, gemini: true, [opt]: true });
     await page.click('#btnSet');
     await page.click('#sTest');
@@ -590,6 +594,25 @@ await scenario('Gemini 自检：网络不通和新格式 key 被拒，各给出�
     assert.match((await page.locator('#sTestOut li').allInnerTexts()).find((r) => r.includes('Gemini')), re);
     await ctx.close();
   }
+});
+
+await scenario('Gemini 思考深度：3 系列压到 low，2.5 系列不发；模型不认时自动去掉重试', async () => {
+  const { page, log, ctx } = await setup(browser, { key: true, gemini: true });
+  await runQuery(page, 'Claude 一直报错');
+  assert.ok(log.thinking.length >= 2 && log.thinking.every((t) => t === 'gemini-3.8-flash=low'), log.thinking.join(','));
+  await page.click('#btnSet');
+  await page.selectOption('#sModel', '__custom__');
+  await page.fill('#sModelCustom', 'gemini-2.5-flash');
+  await page.click('#sTest');
+  await page.waitForFunction(() => !document.getElementById('sTest').disabled, null, { timeout: 40000 });
+  assert.equal(log.thinking[log.thinking.length - 1], 'gemini-2.5-flash=none');
+  await ctx.close();
+  const b = await setup(browser, { key: true, gemini: true, rejectThinking: true });
+  await runQuery(b.page, 'Claude 一直报错');
+  assert.equal(await b.page.locator('.verdict .chip').first().innerText(), '不止你一个', '去掉思考字段重试后照常出结论');
+  assert.ok(b.log.thinking.includes('gemini-3.8-flash=none'));
+  assert.deepEqual(b.log.errors, []);
+  await b.ctx.close();
 });
 
 await browser.close();
