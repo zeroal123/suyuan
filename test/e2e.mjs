@@ -120,6 +120,7 @@ async function setup(browser, opts = {}) {
       if (opts.geminiQuota) return json({ error: { code: 429, message: 'You exceeded your current quota, please check your plan and billing details.', status: 'RESOURCE_EXHAUSTED' } }, 429);
       if (opts.geminiRegion) return json({ error: { code: 400, message: 'User location is not supported for the API use.', status: 'FAILED_PRECONDITION' } }, 400);
       if (opts.geminiHang) return route.abort('timedout');
+      if (opts.geminiBusy) { log.busy = (log.busy || 0) + 1; if (opts.geminiBusy === 'always' || log.busy === 1) return json({ error: { code: 503, message: 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', status: 'UNAVAILABLE' } }, 503); }
       if (opts.geminiAQ) return json({ error: { code: 401, message: 'Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential.', status: 'UNAUTHENTICATED', details: [{ reason: 'ACCESS_TOKEN_TYPE_UNSUPPORTED' }] } }, 401);
       const body = JSON.parse(req.postData());
       const model = decodeURIComponent(url.split('/models/')[1].split(':')[0]);
@@ -617,6 +618,24 @@ await scenario('Gemini 思考深度：提取用 low，归纳用默认，勾选�
   await runQuery(b.page, 'Claude 一直报错');
   assert.equal(await b.page.locator('.verdict .chip').first().innerText(), '不止你一个', '去掉思考字段重试后照常出结论');
   assert.ok(b.log.thinking.filter((t) => t === 'gemini-3.8-flash=none').length >= 2, '拆解被拒后去掉字段重试，归纳本来就不带');
+  assert.deepEqual(b.log.errors, []);
+  await b.ctx.close();
+});
+
+await scenario('Gemini 临时太忙：自动重试一次；一直忙时给出中文说明并换 DeepSeek', async () => {
+  const a = await setup(browser, { key: true, gemini: true, geminiBusy: 'once' });
+  await runQuery(a.page, 'Claude 一直报错');
+  assert.equal(await a.page.locator('.verdict .chip').first().innerText(), '不止你一个');
+  assert.equal(a.log.models.length, 0, '重试成功，不需要换 DeepSeek');
+  await a.ctx.close();
+  const b = await setup(browser, { key: true, gemini: true, geminiBusy: 'always' });
+  await b.page.click('#btnSet');
+  await b.page.click('#sTest');
+  await b.page.waitForFunction(() => !document.getElementById('sTest').disabled, null, { timeout: 40000 });
+  assert.match((await b.page.locator('#sTestOut li').allInnerTexts()).find((r) => r.includes('Gemini')), /Google 这个模型现在太忙（临时情况，和 key、网络无关）/);
+  await b.page.click('#sCancel');
+  await runQuery(b.page, 'Claude 一直报错');
+  assert.match((await b.page.locator('.notice').allInnerTexts()).join(' '), /Gemini：Google 这个模型现在太忙.*已自动改用 DeepSeek/);
   assert.deepEqual(b.log.errors, []);
   await b.ctx.close();
 });

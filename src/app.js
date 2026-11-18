@@ -104,6 +104,7 @@
     else if (/^连不上/.test(m)) e.message = m + '：请求没到达 Google，和 key 无关。多半是梯子没接管 generativelanguage.googleapis.com，试试切到全局模式';
     else if (/ACCESS_TOKEN_TYPE_UNSUPPORTED|Expected OAuth 2 access token/i.test(m)) e.message = 'Google 不接受这个 key（AQ 开头的新格式密钥常见问题），试试在 Google Cloud 控制台的项目里重新生成一个只限 Gemini 的 key';
     else if (/API key not valid|API_KEY_INVALID/i.test(m)) e.message = 'key 无效';
+    else if (e.status === 503 || /high demand|overloaded|UNAVAILABLE/i.test(m)) e.message = 'Google 这个模型现在太忙（临时情况，和 key、网络无关）。稍后再试，或换一个模型，比如 gemini-flash-lite-latest';
     else if (e.status === 429) e.message = '免费额度用完，或请求太频繁';
     else if (e.status === 404 || /is not found|not supported for generateContent/i.test(m)) e.message = m + '。模型「' + model + '」可能已下线，到「设置」里点「刷新列表」换一个';
     return e;
@@ -121,7 +122,14 @@
   async function geminiPost(model, key, body, ms) {
     const url = GEMINI + '/models/' + encodeURIComponent(model) + ':generateContent';
     const send = (b) => req(url, { method: 'POST', headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' }, body: JSON.stringify(b) }, ms);
-    try { return await send(body); } catch (e) {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    try {
+      try { return await send(body); } catch (e) {
+        // 模型临时太忙：等 3 秒再试一次
+        if (e.status === 503) { await wait(3000); return await send(body); }
+        throw e;
+      }
+    } catch (e) {
       // 模型不认思考深度这个字段时，去掉再试一次
       if (e.status === 400 && /thinking/i.test(e.message) && body.generationConfig && body.generationConfig.thinkingConfig) {
         const b = JSON.parse(JSON.stringify(body)); delete b.generationConfig.thinkingConfig;
