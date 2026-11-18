@@ -596,10 +596,16 @@ await scenario('Gemini 自检：网络不通和新格式 key 被拒，各给出�
   }
 });
 
-await scenario('Gemini 思考深度：3 系列压到 low，2.5 系列不发；模型不认时自动去掉重试', async () => {
+await scenario('Gemini 思考深度：提取用 low，归纳用默认，勾选深度思考用 high；2.5 不发；模型不认时去掉重试', async () => {
   const { page, log, ctx } = await setup(browser, { key: true, gemini: true });
   await runQuery(page, 'Claude 一直报错');
-  assert.ok(log.thinking.length >= 2 && log.thinking.every((t) => t === 'gemini-3.8-flash=low'), log.thinking.join(','));
+  assert.deepEqual(log.thinking, ['gemini-3.8-flash=low', 'gemini-3.8-flash=none'], '拆解用 low，归纳用模型默认档');
+  await page.click('#btnSet');
+  await page.check('#sThink');
+  await page.click('#sSave');
+  log.thinking.length = 0;
+  await runQuery(page, 'Claude 一直报错');
+  assert.deepEqual(log.thinking, ['gemini-3.8-flash=low', 'gemini-3.8-flash=high'], '勾选深度思考后归纳用 high');
   await page.click('#btnSet');
   await page.selectOption('#sModel', '__custom__');
   await page.fill('#sModelCustom', 'gemini-2.5-flash');
@@ -610,7 +616,7 @@ await scenario('Gemini 思考深度：3 系列压到 low，2.5 系列不发；�
   const b = await setup(browser, { key: true, gemini: true, rejectThinking: true });
   await runQuery(b.page, 'Claude 一直报错');
   assert.equal(await b.page.locator('.verdict .chip').first().innerText(), '不止你一个', '去掉思考字段重试后照常出结论');
-  assert.ok(b.log.thinking.includes('gemini-3.8-flash=none'));
+  assert.ok(b.log.thinking.filter((t) => t === 'gemini-3.8-flash=none').length >= 2, '拆解被拒后去掉字段重试，归纳本来就不带');
   assert.deepEqual(b.log.errors, []);
   await b.ctx.close();
 });

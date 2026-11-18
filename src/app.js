@@ -108,12 +108,14 @@
     else if (e.status === 404 || /is not found|not supported for generateContent/i.test(m)) e.message = m + '。模型「' + model + '」可能已下线，到「设置」里点「刷新列表」换一个';
     return e;
   }
-  /* Gemini 3 以后的模型默认会先思考，深度 medium 起，慢且占输出额度。查询和自检都把它压到 low；
+  /* Gemini 3 以后的模型会先思考再回答。思考深度按用途分：
+     自检、拆解描述、拆分粘贴内容是简单提取，用 low，快；
+     归纳要做推理和归因，默认用模型自己的默认档，勾选「深度思考」时用 high。
      2.5 及更早的模型不认这个字段，不发 */
   const thinksByLevel = (model) => /^gemini-(?:[3-9]|\d{2,})|^gemini-(?:flash|pro)(?:-lite)?-latest$/.test(model);
-  function geminiGen(model, extra) {
+  function geminiGen(model, extra, level) {
     const g = Object.assign({}, extra);
-    if (thinksByLevel(model)) g.thinkingConfig = { thinkingLevel: 'low' };
+    if (level && thinksByLevel(model)) g.thinkingConfig = { thinkingLevel: level };
     return g;
   }
   async function geminiPost(model, key, body, ms) {
@@ -128,12 +130,13 @@
       throw e;
     }
   }
-  async function geminiChat(messages, maxTokens) {
+  async function geminiChat(messages, maxTokens, level) {
     const sys = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
     const body = {
       contents: messages.filter((m) => m.role !== 'system').map((m) => ({ role: 'user', parts: [{ text: m.content }] })),
       // 思考用掉的 token 也算在输出上限里，给足余量，免得 JSON 被截断
-      generationConfig: geminiGen(cfg.gModel, { responseMimeType: 'application/json', maxOutputTokens: Math.max(maxTokens, 8192) }),
+      // 思考用掉的 token 也算在输出上限里，深度越高给得越多
+      generationConfig: geminiGen(cfg.gModel, { responseMimeType: 'application/json', maxOutputTokens: Math.max(maxTokens, level === 'low' ? 8192 : level === 'high' ? 32768 : 16384) }, level),
     };
     if (sys) body.systemInstruction = { parts: [{ text: sys }] };
     let data;
@@ -150,13 +153,14 @@
   const ready = (p) => (p === 'gemini' ? !!cfg.gKey : !!cfg.key);
   const anyLLM = () => ready('deepseek') || ready('gemini');
   /* 先用选中的那家；它失败且另一家也填了 key 时自动换另一家，并在结果里说明 */
-  async function chatJson(messages, maxTokens, think) {
+  /* think：归纳时是否深度思考；light：只是简单提取（拆解描述、拆分粘贴内容），思考压到最低 */
+  async function chatJson(messages, maxTokens, think, light) {
     const first = cfg.provider === 'gemini' ? 'gemini' : 'deepseek';
     const order = [first, first === 'gemini' ? 'deepseek' : 'gemini'].filter(ready);
     let lastErr = null;
     for (const p of order) {
       try {
-        let v = C.extractJson(p === 'gemini' ? await geminiChat(messages, maxTokens) : await deepseekChat(messages, maxTokens, think));
+        let v = C.extractJson(p === 'gemini' ? await geminiChat(messages, maxTokens, light ? 'low' : think ? 'high' : null) : await deepseekChat(messages, maxTokens, think));
         // DeepSeek 文档提醒 JSON 模式偶尔会返回一串空白，关掉思考再试一次
         if (!v && p === 'deepseek') v = C.extractJson(await deepseekChat(messages, maxTokens, false));
         if (!v) throw new Error('没有返回可解析的 JSON');
@@ -295,7 +299,7 @@
       let parsed;
       if (hasLLM && desc) {
         try {
-          parsed = C.normalizeParsed(await chatJson(C.parseMessages(desc), 900, false), desc, manual);
+          parsed = C.normalizeParsed(await chatJson(C.parseMessages(desc), 900, false, true), desc, manual);
           sParse('ok', parsed.product + ' · ' + (parsed.region === 'cn' ? parsed.symptoms_zh : parsed.symptoms_en).slice(0, 3).join(' / ') + (parsed.region === 'cn' ? ' · 国内产品模式' : ''));
         } catch (e) {
           llmOk = false;
@@ -449,7 +453,7 @@
       sSplit('run');
       let posts;
       try {
-        const out = await chatJson(C.pasteMessages(text, src.name, c.parsed.product, Date.now(), tzMin()), 6000, false);
+        const out = await chatJson(C.pasteMessages(text, src.name, c.parsed.product, Date.now(), tzMin()), 6000, false, true);
         posts = Array.isArray(out.posts) ? out.posts : [];
       } catch (e) { sSplit('fail', e.message); say('拆分失败：' + e.message); return; }
       const linkOf = C.buildDeepLinks(c.parsed).find((l) => l.name === PASTE_LINK[srcKey]);
@@ -801,7 +805,7 @@
     await Promise.all([
       check('DeepSeek 模型', () => req(b + '/chat/completions', { method: 'POST', headers: auth(key), body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1, thinking: { type: 'disabled' } }) }, 30000).then(() => '可用'), key ? '' : '没填 key'),
       check('DeepSeek 搜索', () => req(b + '/v1/tools/search', { method: 'POST', headers: auth(key), body: JSON.stringify({ query: 'status', count: 1 }) }, 25000).then(() => '可用'), key ? '' : '没填 key'),
-      check('Gemini 模型', () => geminiPost(gModel, gKey, { contents: [{ role: 'user', parts: [{ text: 'ping' }] }], generationConfig: geminiGen(gModel, { maxOutputTokens: 512 }) }, 60000).then(() => '可用（' + gModel + '）').catch((e) => { throw geminiError(e, gModel); }), gKey ? '' : '没填 key'),
+      check('Gemini 模型', () => geminiPost(gModel, gKey, { contents: [{ role: 'user', parts: [{ text: 'ping' }] }], generationConfig: geminiGen(gModel, { maxOutputTokens: 512 }, 'low') }, 60000).then(() => '可用（' + gModel + '）').catch((e) => { throw geminiError(e, gModel); }), gKey ? '' : '没填 key'),
       check('GitHub', () => req('https://api.github.com/search/issues?q=' + encodeURIComponent('is:issue repo:anthropics/claude-code') + '&per_page=1').then(() => '可用')),
       check('Hacker News', () => req('https://hn.algolia.com/api/v1/search_by_date?query=status&hitsPerPage=1').then(() => '可用')),
       check('官方状态页（以 Claude 为例）', () => req('https://status.claude.com/api/v2/status.json').then((d) => (d.status && d.status.description) || '可用')),
