@@ -119,6 +119,8 @@ async function setup(browser, opts = {}) {
       assert.equal(req.headers()['x-goog-api-key'], 'g-test');
       if (opts.geminiQuota) return json({ error: { code: 429, message: 'You exceeded your current quota, please check your plan and billing details.', status: 'RESOURCE_EXHAUSTED' } }, 429);
       if (opts.geminiRegion) return json({ error: { code: 400, message: 'User location is not supported for the API use.', status: 'FAILED_PRECONDITION' } }, 400);
+      if (opts.geminiHang) return route.abort('timedout');
+      if (opts.geminiAQ) return json({ error: { code: 401, message: 'Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential.', status: 'UNAUTHENTICATED', details: [{ reason: 'ACCESS_TOKEN_TYPE_UNSUPPORTED' }] } }, 401);
       const body = JSON.parse(req.postData());
       if (!body.systemInstruction) return json({ candidates: [{ content: { parts: [{ text: 'pong' }] }, finishReason: 'MAX_TOKENS' }] }); // 自检的 ping
       assert.equal(body.generationConfig.responseMimeType, 'application/json');
@@ -577,6 +579,17 @@ await scenario('国内产品模式：没填 key 时用内置名单识别，直�
   assert.ok(names.includes('微博搜索') && names.includes('百度资讯'));
   assert.deepEqual(log.errors, []);
   await ctx.close();
+});
+
+await scenario('Gemini 自检：网络不通和新格式 key 被拒，各给出对应的提示', async () => {
+  for (const [opt, re] of [['geminiHang', /和 key 无关。多半是梯子没有接管 generativelanguage\.googleapis\.com/], ['geminiAQ', /Google 不接受这个 key（AQ 开头的新格式密钥常见问题）/]]) {
+    const { page, ctx } = await setup(browser, { key: true, gemini: true, [opt]: true });
+    await page.click('#btnSet');
+    await page.click('#sTest');
+    await page.waitForFunction(() => !document.getElementById('sTest').disabled, null, { timeout: 40000 });
+    assert.match((await page.locator('#sTestOut li').allInnerTexts()).find((r) => r.includes('Gemini')), re);
+    await ctx.close();
+  }
 });
 
 await browser.close();

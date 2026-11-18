@@ -208,7 +208,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 
 <footer class="foot">
   <p>纯前端页面，没有服务器。key 和历史只存在这台设备的浏览器里。</p>
-  <p>版本 v1.6（2026-11-17）</p>
+  <p>版本 v1.7（2026-11-18）</p>
 </footer>
 
 <dialog id="dlg">
@@ -1213,6 +1213,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
   function geminiError(e, model) {
     const m = e.message || '';
     if (/location is not supported/i.test(m)) e.message = '当前网络所在地区用不了 Gemini，需要开梯子';
+    else if (m === '超时' || /^连不上/.test(m)) e.message = m + '：请求没收到 Google 的任何回应，和 key 无关。多半是梯子没有接管 generativelanguage.googleapis.com，试试切到全局模式';
+    else if (/ACCESS_TOKEN_TYPE_UNSUPPORTED|Expected OAuth 2 access token/i.test(m)) e.message = 'Google 不接受这个 key（AQ 开头的新格式密钥常见问题），试试在 Google Cloud 控制台的项目里重新生成一个只限 Gemini 的 key';
     else if (/API key not valid|API_KEY_INVALID/i.test(m)) e.message = 'key 无效';
     else if (e.status === 429) e.message = '免费额度用完，或请求太频繁';
     else if (e.status === 404 || /is not found|not supported for generateContent/i.test(m)) e.message = m + '。模型「' + model + '」可能已下线，到「设置」里点「刷新列表」换一个';
